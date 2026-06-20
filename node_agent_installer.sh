@@ -36,6 +36,21 @@ log_output() {
     tee -a /var/log/runos.log
 }
 
+# fail prints a structured, actionable failure block and exits non-zero. Every
+# install step that can fail routes through this so the operator always gets a
+# clear WHAT/WHY/REMEDY instead of a false "started successfully" banner.
+#   fail "<step>" "<exit code>" "<remedy>"
+fail() {
+    local step="$1" code="$2" remedy="$3"
+    {
+        echo ""
+        echo "FAILED: ${step} failed (exit ${code})."
+        echo "  Try:   ${remedy}"
+        echo "  Logs:  runos logs   (full log: /var/log/runos.log)"
+    } | log_output
+    exit 1
+}
+
 if [ -z "$VERSION" ]; then
     echo "No target node-agent version was provided; aborting install." | log_output
     exit 1
@@ -66,29 +81,49 @@ echo "Verified and installed RunOS node agent ${VERSION}." | log_output
 
 # Set the installer configuration
 echo "Configuring RunOS installer..." | log_output
-/usr/local/bin/runos set-config client.server.installer $TEMPLATES_URL 2>&1 | log_output
+/usr/local/bin/runos set-config client.server.installer "$TEMPLATES_URL" 2>&1 | log_output
+RC=${PIPESTATUS[0]}
+if [ "$RC" -ne 0 ]; then
+    fail "Configure installer" "$RC" \
+        "ensure /etc/runos is writable (run as root) and re-run the installer"
+fi
 
-# Download and install the public CA certificate
+# Download and install the public CA certificate.
+# Use curl -fSL so an HTTP error (404, proxy/captive-portal error page) fails
+# closed instead of writing a garbage "cert" that later breaks the TLS handshake
+# with an opaque error. Then verify the bytes are actually a PEM certificate.
 echo "Downloading RunOS public CA certificate..." | log_output
 mkdir -p /etc/runos
-curl -o /etc/runos/l1sec-ca.runos.public.pem $CDN_URL/artifacts/l1sec-ca.runos.public.pem 2>&1 | log_output
-if [ $? -ne 0 ]; then
-    echo "Failed to download the public CA certificate" | log_output
-    exit 1
+CA_PATH="/etc/runos/l1sec-ca.runos.public.pem"
+curl -fSL -o "$CA_PATH" "$CDN_URL/artifacts/l1sec-ca.runos.public.pem" 2>&1 | log_output
+RC=${PIPESTATUS[0]}
+if [ "$RC" -ne 0 ]; then
+    fail "Download CA certificate" "$RC" \
+        "check egress to $CDN_URL on 443 (HTTP error, proxy, or DNS); verify HTTP(S)_PROXY settings"
 fi
-chmod 644 /etc/runos/l1sec-ca.runos.public.pem
+if ! grep -q "BEGIN CERTIFICATE" "$CA_PATH"; then
+    fail "Verify CA certificate" "1" \
+        "the downloaded CA is not a valid certificate (a proxy/captive portal may have returned an error page); check $CDN_URL"
+fi
+chmod 644 "$CA_PATH"
 
-# Run preflight checks
+# Run preflight checks. Pass --server so preflight can probe the actual Nodeward
+# host (DNS/firewall reachability on 9191/9192) before we attempt registration.
 echo "Running preflight checks..." | log_output
-/usr/local/bin/runos preflight 2>&1 | log_output
-PREFLIGHT_EXIT_CODE=${PIPESTATUS[0]}
-if [ $PREFLIGHT_EXIT_CODE -ne 0 ]; then
-    echo "Preflight checks failed. Please address the issues above and try again." | log_output
-    exit 1
+/usr/local/bin/runos preflight -s "$NODEWARD_BACKEND" 2>&1 | log_output
+RC=${PIPESTATUS[0]}
+if [ "$RC" -ne 0 ]; then
+    fail "Preflight checks" "$RC" \
+        "address the issues reported above; re-run 'sudo runos preflight -s $NODEWARD_BACKEND' to re-check"
 fi
 
 echo "Registering RunOS node..." | log_output
-/usr/local/bin/runos register -a $ACCOUNT_ID -t $SECURITY_TOKEN -c $CP -s $NODEWARD_BACKEND 2>&1 | log_output
+/usr/local/bin/runos register -a "$ACCOUNT_ID" -t "$SECURITY_TOKEN" -c "$CP" -s "$NODEWARD_BACKEND" 2>&1 | log_output
+RC=${PIPESTATUS[0]}
+if [ "$RC" -ne 0 ]; then
+    fail "Register node" "$RC" \
+        "re-copy the registration command from the RunOS console (tokens are short-lived) and re-run; check connectivity to $NODEWARD_BACKEND"
+fi
 
 # Create a systemd service file for the RunOS Node Agent agent
 SERVICE_FILE="/etc/systemd/system/runos.service"
@@ -133,8 +168,19 @@ echo "Setting up RunOS service..." | log_output
 sudo systemctl daemon-reload 2>&1 | log_output
 sudo systemctl enable runos.service 2>&1 | log_output
 sudo systemctl start runos.service 2>&1 | log_output
+RC=${PIPESTATUS[0]}
+if [ "$RC" -ne 0 ]; then
+    fail "Start RunOS service" "$RC" \
+        "inspect the unit with 'systemctl status runos.service' and 'journalctl -u runos'"
+fi
 
 echo "Installing RunOS components..." | log_output
 /usr/local/bin/runos install 2>&1 | log_output
+RC=${PIPESTATUS[0]}
+if [ "$RC" -ne 0 ]; then
+    fail "Install Kubernetes/WireGuard" "$RC" \
+        "see /var/log/runos.log and 'journalctl -u runos'; run 'sudo runos preflight -s $NODEWARD_BACKEND' to diagnose, then re-run 'sudo runos install'"
+fi
 
-echo "RunOS Node Agent service started successfully." | log_output
+# Only reached when every step above succeeded.
+echo "RunOS Node Agent installed and started successfully." | log_output

@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -61,11 +60,16 @@ func init() {
 	}
 }
 
+// assumeDefaultNodeIp returns the first non-loopback IPv4 address, or "" if none
+// can be determined. It runs in package init() for every `runos` subcommand
+// (even version/preflight), so it must never panic or os.Exit on an unusual
+// network setup (IPv6-only host, odd interfaces); it returns "" and lets the IP
+// be resolved later or set explicitly via node.ip in /etc/runos/config.yaml.
 func assumeDefaultNodeIp() string {
 	addresses, err := net.InterfaceAddrs()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		roslog.W("could not enumerate interface addresses to auto-detect node IP", err)
+		return ""
 	}
 
 	for _, addr := range addresses {
@@ -75,7 +79,8 @@ func assumeDefaultNodeIp() string {
 		}
 	}
 
-	panic("No suitable IP address found")
+	roslog.W("could not auto-detect a node IPv4 address; set node.ip in /etc/runos/config.yaml if registration needs it", nil)
+	return ""
 }
 
 // GetAID returns the configured account ID.
@@ -114,13 +119,16 @@ func GetServer() string {
 }
 
 // UpdateConfig persists the given account ID and node ID to the config file.
-func UpdateConfig(aid string, nid string) {
+// It returns the write error (never panics) so the caller can surface a clear
+// "run as root / /etc/runos not writable" remedy and exit non-zero.
+func UpdateConfig(aid string, nid string) error {
 	viper.Set("client.aid", aid)
 	viper.Set("node.nid", nid)
 	if err := viper.WriteConfig(); err != nil {
 		roslog.E("Error writing config file", err)
-		panic(err)
+		return err
 	}
+	return nil
 }
 
 // SetNodewardHost persists the nodeward server host in config. (Formerly

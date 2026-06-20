@@ -2,12 +2,14 @@ package install
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"time"
+
 	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/commons"
 	pb "github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
-	"strings"
-	"time"
 )
 
 // K8s installs Kubernetes on this node by fetching and running the install
@@ -64,9 +66,11 @@ func K8s() error {
 			}
 		}
 
-		// Non-retryable error or max retries exceeded
+		// Non-retryable error or max retries exceeded. Return a contextual error
+		// (never panic) so the install exits non-zero with an actionable message
+		// instead of dumping a Go stack trace under the systemd service.
 		roslog.E("Error executing GetInstallCommands", err, "attempt", attempt)
-		panic(err)
+		return fmt.Errorf("could not fetch install commands from Nodeward after %d attempts: %w (check connectivity to Nodeward operations channel on TCP 9192 and that the node is registered)", maxRetries, err)
 	}
 
 	return commons.ProcessInstallCommandsStatusAware(res)

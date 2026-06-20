@@ -10,9 +10,18 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/runos-official/nodeagent/commons"
+	"github.com/runos-official/nodeagent/roslog"
 	"github.com/spf13/cobra"
 )
+
+// server is the resolved Nodeward host the install will register against. The
+// installer passes it via `runos preflight --server <host>` so we can probe the
+// one host registration actually needs (DNS/firewall classification). Empty is
+// allowed: the nodeward probe is skipped with a warning rather than failing.
+var server string
 
 var RootCmd = &cobra.Command{
 	Use:   "preflight",
@@ -20,11 +29,18 @@ var RootCmd = &cobra.Command{
 	Long:  `Performs pre-flight checks to ensure the system is ready for node registration and installation`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runPreflightChecks(); err != nil {
+			// Durable record for `runos logs`, then the terminal message.
+			roslog.E("preflight check failed", err)
 			fmt.Fprintf(os.Stderr, "Preflight check failed: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Println("System is ready for installation")
 	},
+}
+
+func init() {
+	RootCmd.PersistentFlags().StringVarP(&server, "server", "s", "",
+		"Nodeward host this node will register against (probed for reachability)")
 }
 
 func runPreflightChecks() error {
@@ -34,7 +50,27 @@ func runPreflightChecks() error {
 		return nil
 	}
 
+	// Run the cheapest, most fundamental check first: everything downstream
+	// (writing /etc/runos, modprobe, apt, kubeadm) needs root, and a non-root
+	// run otherwise fails deep inside with a cryptic permission error.
+	if err := checkRoot(); err != nil {
+		return err
+	}
+
+	// Local, cheap checks before any network I/O so the fast failures fire first.
+	if err := checkArch(); err != nil {
+		return err
+	}
+
 	if err := checkSystemRequirements(); err != nil {
+		return err
+	}
+
+	if err := checkSwap(); err != nil {
+		return err
+	}
+
+	if err := checkPortsFree(); err != nil {
 		return err
 	}
 
@@ -46,20 +82,6 @@ func runPreflightChecks() error {
 		return err
 	}
 
-	// Check DNS and network connectivity BEFORE apt-get update
-	// so we get fast, clear errors if network is broken
-	if err := checkDNSResolution(); err != nil {
-		return err
-	}
-
-	if err := checkNetworkConnectivity(); err != nil {
-		return err
-	}
-
-	if err := checkBrokenAptSources(); err != nil {
-		return err
-	}
-
 	if err := checkKernelModules(); err != nil {
 		return err
 	}
@@ -68,7 +90,177 @@ func runPreflightChecks() error {
 		return err
 	}
 
+	// Clock skew breaks TLS handshakes and apt Release-file validation, so check
+	// it before the network checks (which would otherwise fail cryptically).
+	if err := checkClockSkew(); err != nil {
+		return err
+	}
+
+	// Network checks last. DNS before HTTPS so a broken resolver fails fast.
+	if err := checkDNSResolution(); err != nil {
+		return err
+	}
+
+	if err := checkNetworkConnectivity(); err != nil {
+		return err
+	}
+
+	if err := checkNodewardReachable(); err != nil {
+		return err
+	}
+
+	if err := checkBrokenAptSources(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// checkRoot ensures we are running as the effective root user. Almost every
+// downstream step (config writes to /etc/runos, modprobe, apt, kubeadm) needs
+// it; without this the failure surfaces much later as an opaque EACCES.
+func checkRoot() error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root (effective UID 0)\n\nRe-run with sudo, e.g.: sudo curl -sSL <url> | sudo bash\nor: sudo runos preflight")
+	}
+	return nil
+}
+
+// checkArch ensures the CPU architecture matches a binary we publish. The
+// installer shell only maps x86_64/aarch64; anything else cannot run the agent.
+func checkArch() error {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		return fmt.Errorf("unsupported CPU architecture %q: only amd64 and arm64 are supported\n\nProvision the node on an amd64 or arm64 host and re-run", runtime.GOARCH)
+	}
+	return nil
+}
+
+// checkSwap fails if swap is enabled. kubeadm hard-rejects swap, and the worker
+// join path masks it with --ignore-preflight-errors=all, producing a kubelet
+// that crash-loops instead of a clean error. Catch it up front.
+func checkSwap() error {
+	data, err := os.ReadFile("/proc/swaps")
+	if err != nil {
+		// No /proc/swaps (unusual) -> nothing we can assert; don't block.
+		return nil
+	}
+	// /proc/swaps always has a header line; a second non-empty line means an
+	// active swap area.
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) > 1 {
+		return fmt.Errorf("swap is enabled; Kubernetes/kubeadm require swap off\n\nDisable it now with:\n  sudo swapoff -a\n  sudo sed -i '/ swap / s/^/#/' /etc/fstab\nThen re-run the installer")
+	}
+	return nil
+}
+
+// checkPortsFree fails if any kubeadm/RunOS-required port is already bound. A
+// prior partial install, a stray etcd/haproxy, or another k8s leaves these
+// taken and the relevant component later fails with a port-specific error that
+// doesn't name the owning process.
+func checkPortsFree() error {
+	tcpPorts := map[int]string{
+		6443:  "kube-apiserver",
+		10250: "kubelet",
+		2379:  "etcd",
+		2380:  "etcd-peer",
+		6446:  "haproxy(runos)",
+	}
+	// 51820 (wireguard) and 8472 (cilium vxlan) are UDP.
+	udpPorts := map[int]string{
+		51820: "wireguard",
+		8472:  "cilium-vxlan",
+	}
+
+	var taken []string
+	for p, name := range tcpPorts {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", p))
+		if err != nil {
+			taken = append(taken, fmt.Sprintf("%d/tcp (%s)", p, name))
+			continue
+		}
+		ln.Close()
+	}
+	for p, name := range udpPorts {
+		pc, err := net.ListenPacket("udp", fmt.Sprintf(":%d", p))
+		if err != nil {
+			taken = append(taken, fmt.Sprintf("%d/udp (%s)", p, name))
+			continue
+		}
+		pc.Close()
+	}
+
+	if len(taken) > 0 {
+		return fmt.Errorf("required ports already in use: %s\n\nFind the owner with: sudo ss -tulpnH 'sport = :<port>'\nStop the conflicting service, or run 'sudo kubeadm reset -f' if this is a stale install, then re-run", strings.Join(taken, ", "))
+	}
+	return nil
+}
+
+// checkClockSkew warns/fails when the system clock is not NTP-synchronized. A
+// skewed clock breaks the mTLS handshake to nodeward ("certificate is not yet
+// valid / has expired") and apt Release-file validation, both of which surface
+// as cryptic TLS/apt errors with no hint that the clock is the cause.
+func checkClockSkew() error {
+	// timedatectl is the canonical source on Ubuntu. If it's absent we can't
+	// reliably assert sync, so we skip rather than block.
+	path, err := exec.LookPath("timedatectl")
+	if err != nil {
+		roslog.W("cannot verify clock sync: timedatectl not found; skipping clock check", nil)
+		return nil
+	}
+	out, err := exec.Command(path, "show", "-p", "NTPSynchronized", "--value").Output()
+	if err != nil {
+		// timedatectl present but errored (e.g. no systemd) -> warn, don't block.
+		roslog.W("could not query clock sync state; skipping clock check", err)
+		return nil
+	}
+	if strings.TrimSpace(string(out)) != "yes" {
+		return fmt.Errorf("system clock is not NTP-synchronized; TLS handshakes to Nodeward and package mirrors may fail with 'certificate not yet valid/expired'\n\nFix with:\n  sudo timedatectl set-ntp true\nThen wait ~10s, verify with 'timedatectl', and re-run")
+	}
+	return nil
+}
+
+// checkNodewardReachable dials the configured Nodeward host on its registration
+// (9191) and operations (9192) ports, classifying DNS failure vs refused vs
+// timeout/firewall so the operator knows whether it's --server, DNS, or egress.
+// Skipped (with a warning) when --server was not provided.
+func checkNodewardReachable() error {
+	host := strings.TrimSpace(server)
+	if host == "" {
+		roslog.W("preflight ran without --server; skipping Nodeward reachability probe", nil)
+		return nil
+	}
+
+	for _, p := range []struct {
+		port int
+		name string
+	}{
+		{9191, "registration (L1Sec)"},
+		{9192, "operations (L2Sec)"},
+	} {
+		addr := net.JoinHostPort(host, strconv.Itoa(p.port))
+		conn, err := net.DialTimeout("tcp", addr, 8*time.Second)
+		if err != nil {
+			return fmt.Errorf("cannot reach Nodeward %s at %s: %s\n\nVerify with: nc -vz %s %d", p.name, addr, classifyDialError(err, host), host, p.port)
+		}
+		conn.Close()
+	}
+	return nil
+}
+
+// classifyDialError turns a net.Dial error into an operator-facing cause +
+// remedy: DNS failure, connection refused, or timeout/firewall.
+func classifyDialError(err error, host string) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "no such host") || strings.Contains(msg, "server misbehaving") || strings.Contains(msg, "name resolution"):
+		return fmt.Sprintf("DNS resolution failed for %q — check /etc/resolv.conf and that --server is the correct host", host)
+	case strings.Contains(msg, "connection refused"):
+		return "connection refused — the host is reachable but nothing is listening on that port (wrong port, or Nodeward is down)"
+	case strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "deadline exceeded"):
+		return "connection timed out — an egress firewall is likely blocking this TCP port, or there is no route"
+	default:
+		return msg
+	}
 }
 
 // checkRebootRequired checks if the system requires a reboot
@@ -236,32 +428,57 @@ func checkDiskSpace() error {
 	return nil
 }
 
-// checkOSVersion ensures the system is running Ubuntu 24.04
+// supportedUbuntuVersions is the set of Ubuntu LTS releases the installer
+// supports end to end. Keep in sync with the Nodeward GetInstallCommands OS
+// branches (per-release apt/containerd/netplan handling).
+var supportedUbuntuVersions = map[string]bool{
+	"22.04": true,
+	"24.04": true,
+	"26.04": true,
+}
+
+// supportedUbuntuList renders the supported set for user-facing messages.
+const supportedUbuntuList = "22.04, 24.04, 26.04"
+
+// checkOSVersion ensures the system runs a supported Ubuntu LTS release. It uses
+// the single shared os-release parser (ID + ID_LIKE + VERSION_ID) so its verdict
+// can never diverge from the OS string sent to Nodeward at registration.
 func checkOSVersion() error {
-	file, err := os.Open("/etc/os-release")
+	return verifyOSSupported(readOSReleaseOrEmpty())
+}
+
+// readOSReleaseOrEmpty reads /etc/os-release via the shared parser, returning a
+// zero value (which verifyOSSupported reports as unsupported) on read error.
+func readOSReleaseOrEmpty() commons.OSRelease {
+	rel, err := commons.ReadOSRelease()
 	if err != nil {
-		return fmt.Errorf("failed to read OS release info: %w", err)
+		return commons.OSRelease{}
 	}
-	defer file.Close()
+	return rel
+}
 
-	var osName, osVersion string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "NAME=") {
-			osName = strings.Trim(strings.TrimPrefix(line, "NAME="), "\"")
+// verifyOSSupported is the pure predicate behind checkOSVersion (unit-tested).
+func verifyOSSupported(rel commons.OSRelease) error {
+	// Operator escape hatch: an interim release (e.g. 26.10) or a close
+	// derivative can be forced through with eyes open.
+	if os.Getenv("RUNOS_ALLOW_UNTESTED_OS") == "1" {
+		roslog.W("RUNOS_ALLOW_UNTESTED_OS=1 set; skipping OS support check", nil, "id", rel.ID, "version_id", rel.VersionID)
+		return nil
+	}
+
+	if !rel.IsUbuntu() {
+		detected := rel.Name
+		if detected == "" {
+			detected = rel.ID
 		}
-		if strings.HasPrefix(line, "VERSION_ID=") {
-			osVersion = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
+		if detected == "" {
+			detected = "unknown"
 		}
+		return fmt.Errorf("unsupported OS %q: this installer supports Ubuntu LTS only (%s)\n\nProvision the node on a supported Ubuntu image and re-run, or override at your own risk with RUNOS_ALLOW_UNTESTED_OS=1", detected, supportedUbuntuList)
 	}
 
-	if !strings.Contains(strings.ToLower(osName), "ubuntu") {
-		return fmt.Errorf("unsupported OS: found %s, need Ubuntu 22.04 or 24.04", osName)
-	}
-
-	if osVersion != "22.04" && osVersion != "24.04" {
-		return fmt.Errorf("unsupported Ubuntu version: found %s, need 22.04 or 24.04", osVersion)
+	if !supportedUbuntuVersions[rel.VersionID] {
+		return fmt.Errorf("unsupported Ubuntu version %q: supported releases are %s (LTS only)\n\nUse a supported release, or override at your own risk with RUNOS_ALLOW_UNTESTED_OS=1", rel.VersionID, supportedUbuntuList)
 	}
 
 	return nil
@@ -326,14 +543,29 @@ func checkKernelModules() error {
 		}
 	}
 
-	// Check wireguard separately as it's critical
-	// On Ubuntu 24.04 (kernel 6.8+), WireGuard is built into the kernel
+	// Check wireguard separately as it's critical. WireGuard is in-kernel on
+	// Linux 5.6+, so all supported Ubuntu LTS releases have it; reference the
+	// detected release + kernel rather than a hardcoded version.
 	cmd := exec.Command("modprobe", "--dry-run", "wireguard")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("WireGuard kernel module not available\n\nOn Ubuntu 24.04, WireGuard is built into the kernel.\nTry running: sudo modprobe wireguard\nIf that fails, ensure you have the correct kernel: uname -r")
+		rel := readOSReleaseOrEmpty()
+		release := rel.VersionID
+		if release == "" {
+			release = "this system"
+		}
+		return fmt.Errorf("WireGuard kernel module not available (running Ubuntu %s on kernel %s)\n\nOn supported Ubuntu LTS releases WireGuard is in-kernel. Try: sudo modprobe wireguard\nIf that fails, install linux-modules-extra-$(uname -r) or boot the generic/HWE kernel, then retry", release, unameRelease())
 	}
 
 	return nil
+}
+
+// unameRelease returns the running kernel release (uname -r), or "unknown".
+func unameRelease() string {
+	out, err := exec.Command("uname", "-r").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // checkBrokenAptSources checks for broken apt sources that would cause apt-get update to fail

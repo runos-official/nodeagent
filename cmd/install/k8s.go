@@ -10,20 +10,20 @@ import (
 var k8sCmd = &cobra.Command{
 	Use:   "k8s",
 	Short: "Install Kubernetes, assumes VPN is already installed",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Sync peer so that we can join a cluster
 		roslog.Println("Syncing VPN")
 		if err := sync.ForceVpnSync(); err != nil {
-			roslog.Printf("Fatal error: %v\n", err)
-			roslog.E("VPN sync failed", err)
-			return
+			return roslog.Fail("Sync VPN peers", err.Error(),
+				"verify WireGuard came up ('wg show') and Nodeward is reachable, then re-run")
 		}
 
 		// Install K8s, assuming we now have vpn connectivity to the target peer node to join the cluster.
 		roslog.Println("Installing K8s")
 		if err := install.K8s(); err != nil {
-			roslog.E("K8s installation failed", err)
-			return
+			return roslog.Fail("Install Kubernetes", err.Error(),
+				"see /var/log/runos.log and 'journalctl -u runos'; run 'sudo runos preflight' to diagnose, then re-run")
 		}
+		return nil
 	},
 }

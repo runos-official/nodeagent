@@ -10,21 +10,20 @@ import (
 var wireguardCmd = &cobra.Command{
 	Use:   "wireguard",
 	Short: "Install Wireguard only",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		// Install Wireguard
 		roslog.Println("Installing Wireguard")
 		if err := registernode.InstallVpn(); err != nil {
-			roslog.Printf("Fatal error: %v\n", err)
-			roslog.E("VPN installation failed", err)
-			return
+			return roslog.Fail("Install WireGuard", err.Error(),
+				"check connectivity to Nodeward on TCP 9192 and run 'sudo runos preflight', then re-run")
 		}
 
 		// Sync peer so that we can join a cluster
 		roslog.Println("Syncing VPN")
 		if err := sync.ForceVpnSync(); err != nil {
-			roslog.Printf("Fatal error: %v\n", err)
-			roslog.E("VPN sync failed", err)
-			return
+			return roslog.Fail("Sync VPN peers", err.Error(),
+				"verify WireGuard came up ('wg show') and Nodeward is reachable, then re-run")
 		}
+		return nil
 	},
 }
