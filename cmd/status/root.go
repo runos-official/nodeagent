@@ -63,9 +63,9 @@ func testConnection() (bool, error) {
 		}
 	}()
 
-	_, _, cancel, conn := backend.NodewardL2Sec()
-	if conn == nil {
-		return false, fmt.Errorf("connection failed")
+	_, _, cancel, conn, err := backend.NodewardL2Sec()
+	if err != nil || conn == nil {
+		return false, fmt.Errorf("connection failed: %w", err)
 	}
 	defer cancel()
 	defer conn.Close()

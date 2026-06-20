@@ -48,6 +48,14 @@ func HandleUpdateDnsmasq(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error)
 		return nil, err
 	}
 
+	// Validate the proposed config against the dnsmasq directive allowlist before
+	// it is ever written to disk. This blocks directives that pull external
+	// config or run scripts (conf-file, addn-config, dhcp-script, script*, ...).
+	if err := validateDnsmasqContents(request.FileContents); err != nil {
+		roslog.E("Rejected UPDATE_DNSMASQ: disallowed directive", err)
+		return nil, err
+	}
+
 	// Check if the new content is different from the existing file
 	if !isContentChanged(request.FileContents) {
 		roslog.D("dnsmasq configuration unchanged, skipping restart")

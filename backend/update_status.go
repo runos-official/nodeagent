@@ -9,7 +9,10 @@ import (
 
 // UpdateStatus reports the node's current lifecycle status to Nodeward.
 func UpdateStatus(status string) error {
-	c, _, backendCancel, conn := NodewardL2Sec()
+	c, _, backendCancel, conn, err := NodewardL2Sec()
+	if err != nil {
+		return err
+	}
 	defer backendCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

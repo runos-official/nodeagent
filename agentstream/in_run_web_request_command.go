@@ -2,10 +2,12 @@ package agentstream
 
 import (
 	"bytes"
-	"crypto/tls"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -26,9 +28,14 @@ const webRequestTimeout = 30 * time.Second
 const webRequestMaxBodyBytes = 32 << 20 // 32 MiB
 
 type runWebRequest struct {
-	Url           string            `json:"url"`
-	Method        string            `json:"method"`
-	PostData      string            `json:"postData"`
+	Url      string `json:"url"`
+	Method   string `json:"method"`
+	PostData string `json:"postData"`
+	// AllowInsecure is retained for wire compatibility but is intentionally
+	// ignored: TLS certificate verification is always ON. A caller-controlled
+	// knob that disables verification is itself an attack surface (it would let
+	// a MITM impersonate any endpoint, including internal/metadata ones), so it
+	// is hard-gated off rather than honoured.
 	AllowInsecure bool              `json:"allowInsecure"`
 	Headers       map[string]string `json:"headers"`
 }
@@ -54,14 +61,42 @@ func HandleRunWebRequest(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error)
 		return nil, err
 	}
 
-	// Create custom HTTP client with optional insecure SSL and a total
-	// request timeout so a slow/hung endpoint cannot tie up a worker.
+	// SSRF guard: require http/https, resolve the host, and reject any request
+	// whose resolved IP is loopback, link-local, or the cloud metadata address.
+	// We resolve here and pin the dial to the validated IP below, so a hostile
+	// DNS record cannot rebind to an internal address between check and connect.
+	parsedURL, resolvedIPs, err := validateOutboundURL(request.Url, false)
+	if err != nil {
+		roslog.E("Rejected RUN_WEB_REQUEST: URL failed SSRF validation", err)
+		return nil, err
+	}
+
+	// Pick the first validated IP to dial. All resolvedIPs already passed the
+	// block check above, so any is safe; pinning to one defeats DNS-rebinding.
+	pinnedIP := resolvedIPs[0]
+
+	// Custom dialer that ignores the (re-)resolved host and always connects to
+	// the IP we validated, preserving the original port from the URL.
+	dialer := &net.Dialer{Timeout: webRequestTimeout}
+	dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, port, splitErr := net.SplitHostPort(addr)
+		if splitErr != nil {
+			return nil, fmt.Errorf("invalid dial address %q: %w", addr, splitErr)
+		}
+		// Re-validate the pinned IP defensively before dialing.
+		if isBlockedIP(pinnedIP) {
+			return nil, fmt.Errorf("refusing to dial internal/metadata address %s", pinnedIP)
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(pinnedIP.String(), port))
+	}
+
+	// TLS verification is always on. ServerName is left to the default (the URL
+	// host) so cert validation still matches the intended hostname even though
+	// we dial a pinned IP.
 	client := &http.Client{
 		Timeout: webRequestTimeout,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: request.AllowInsecure,
-			},
+			DialContext: dialContext,
 		},
 	}
 
@@ -76,7 +111,7 @@ func HandleRunWebRequest(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error)
 		method = request.Method
 	}
 
-	req, err := http.NewRequest(method, request.Url, reqBody)
+	req, err := http.NewRequest(method, parsedURL.String(), reqBody)
 	if err != nil {
 		roslog.E("Error creating request", err)
 		return nil, err

@@ -33,7 +33,12 @@ func RenewCertificate() {
 
 	// Step 2: Connect to Nodeward and request new certificate
 	fmt.Printf("→ Connecting to Nodeward with current certificate...\n")
-	c, ctx, cancel, conn := backend.NodewardL2Sec()
+	c, ctx, cancel, conn, err := backend.NodewardL2Sec()
+	if err != nil {
+		fmt.Printf("  ✗ Failed to connect to Nodeward: %v\n\n", err)
+		roslog.E("Failed to connect to Nodeward for certificate renewal", err)
+		os.Exit(1)
+	}
 	defer cancel()
 	defer conn.Close()
 

@@ -12,7 +12,10 @@ import (
 // InstallVpn installs WireGuard on this node by fetching and running the VPN
 // install command list from Nodeward.
 func InstallVpn() error {
-	c, _, backendCancel, conn := backend.NodewardL2Sec()
+	c, _, backendCancel, conn, err := backend.NodewardL2Sec()
+	if err != nil {
+		return err
+	}
 	defer backendCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

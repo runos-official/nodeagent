@@ -13,7 +13,10 @@ import (
 // K8s installs Kubernetes on this node by fetching and running the install
 // command list from Nodeward.
 func K8s() error {
-	c, _, backendCancel, conn := backend.NodewardL2Sec()
+	c, _, backendCancel, conn, err := backend.NodewardL2Sec()
+	if err != nil {
+		return err
+	}
 	// The backend hands back its own cancel; defer it before reassigning so the
 	// original context is not leaked when we replace ctx/cancel below.
 	defer backendCancel()
@@ -27,7 +30,7 @@ func K8s() error {
 	var fileList map[string]string
 
 	// Get all files in /etc/netplan
-	fileList, err := commons.GetAllFilesInDirectory("/etc/netplan")
+	fileList, err = commons.GetAllFilesInDirectory("/etc/netplan")
 	if err != nil {
 		roslog.E("Error getting files in /etc/netplan", err)
 	}

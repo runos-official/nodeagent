@@ -43,6 +43,19 @@ func HandleInstallHelmChart(b64ScriptData *pb.ToNodeAgent) (*pb.FromNodeAgent, e
 		return nil, err
 	}
 
+	// Validate chart name/namespace (become helm argv) and repo/values URLs
+	// (fetched by helm as root): require TLS and block internal/metadata IPs.
+	if err := validateInstallHelmChartRequest(request.RepoUrl, request.ChartName, request.Namespace, request.ValuesUrl); err != nil {
+		roslog.E("Rejected INSTALL_HELM_CHART: invalid input", err)
+		response := installHelmChartResponse{Response: err.Error()}
+		responseJson, _ := json.Marshal(response)
+		responseJsonB64 := base64.StdEncoding.EncodeToString(responseJson)
+		return &pb.FromNodeAgent{
+			JsonB64: responseJsonB64,
+			Type:    "INSTALL_HELM_CHART_ERROR",
+		}, nil
+	}
+
 	commandResponse, err := k8s.InstallHelmChart(
 		request.RepoUrl,
 		request.MyRepoName,

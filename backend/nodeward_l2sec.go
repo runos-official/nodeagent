@@ -22,9 +22,19 @@ var (
 	onceL2Sec sync.Once
 )
 
+// l2secDialTimeout bounds a single dial attempt so it cannot hang forever
+// (replacing the unbounded grpc.WithBlock behavior). The in-process reconnect
+// loop in the agent retries dialing on its own backoff schedule.
+const l2secDialTimeout = 20 * time.Second
+
 // NodewardL2Sec dials the L2Sec (mTLS) operational channel and returns the
 // client plus the context, cancel func and connection the caller must clean up.
-func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc, *grpc.ClientConn) {
+//
+// The dial is bounded by l2secDialTimeout: it returns an error instead of
+// blocking forever, so a supervised caller can back off and re-dial rather than
+// wedging the process. It panics only on local/unrecoverable setup errors
+// (missing or unparsable client cert / CA), never on a transient connect failure.
+func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc, *grpc.ClientConn, error) {
 	onceL2Sec.Do(func() {
 		connectionString := fmt.Sprintf("%s:%d", config.GetNodewardHost(), 9192)
 		roslog.I("Connecting to nodeward L2", "connection_string", connectionString)
@@ -58,7 +68,12 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	}
 
 	attemptCount := 0
-	conn, err := grpc.Dial(*addrL2Sec,
+	// Bound a single dial attempt. We use DialContext with a timeout instead of
+	// grpc.WithBlock + no deadline, so a dead control plane cannot hang the dial
+	// forever; the agent's reconnect loop owns retry/backoff at a higher level.
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), l2secDialTimeout)
+	defer dialCancel()
+	conn, err := grpc.DialContext(dialCtx, *addrL2Sec,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 		grpc.WithDefaultServiceConfig(`{
             "serviceConfig": {
@@ -96,12 +111,14 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 		}),
 	)
 	if err != nil {
-		roslog.E("did not connect", err)
-		panic(err)
+		// Transient connect failure: return the error so the caller can back off
+		// and re-dial instead of crashing the process.
+		roslog.W("did not connect to nodeward L2", err)
+		return nil, nil, nil, nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	c := l2sec.NewNodewardClient(conn)
 
-	return c, ctx, cancel, conn
+	return c, ctx, cancel, conn, nil
 }

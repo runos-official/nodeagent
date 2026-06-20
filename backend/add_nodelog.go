@@ -10,7 +10,10 @@ import (
 // AddNodelog sends a node-scoped log entry to Nodeward with the given severity,
 // type and message.
 func AddNodelog(severity int, logType string, message string) error {
-	c, _, backendCancel, conn := NodewardL2Sec()
+	c, _, backendCancel, conn, err := NodewardL2Sec()
+	if err != nil {
+		return err
+	}
 	defer backendCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

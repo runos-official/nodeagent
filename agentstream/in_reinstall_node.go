@@ -2,12 +2,15 @@ package agentstream
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
 	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/commons"
 	pb "github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
-	"os"
-	"os/exec"
 )
 
 // ReinstallNodeRequestType is the instruction type that reinstalls the node.
@@ -44,10 +47,36 @@ func HandleReinstallNode(in *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
 	return NoContentResponse, nil
 }
 
+// reinstallScriptPath is the fixed, root-only location of the reinstall script.
+// The systemd unit references this path literally; the caller-supplied command
+// is written into the file (argv-safe), never interpolated into the unit body.
+const reinstallScriptPath = "/var/lib/runos/reinstall.sh"
+
 // QueueReinstallCommand writes and enables a oneshot systemd service that runs
 // installCmd on next boot, so reinstallation survives the reboot.
+//
+// Security: installCmd is written verbatim into a root-only 0600 script file at a
+// FIXED path and the unit's ExecStart points at that fixed path. Nothing from
+// installCmd is interpolated into the unit body, which removes both the systemd
+// unit-directive injection and the shell injection that the old
+// `ExecStart=/bin/bash -c '%s ...'` interpolation allowed.
 func QueueReinstallCommand(installCmd string) error {
-	// Create a oneshot systemd service
+	if strings.TrimSpace(installCmd) == "" {
+		return fmt.Errorf("reinstall command is empty")
+	}
+
+	// Write the reinstall command to a root-only script file (argv-safe write:
+	// the command text is the file content, not part of any shell/unit string).
+	if err := os.MkdirAll(filepath.Dir(reinstallScriptPath), 0700); err != nil {
+		return fmt.Errorf("failed to create reinstall script dir: %w", err)
+	}
+	scriptBody := "#!/bin/bash\n" + installCmd + "\n"
+	if err := os.WriteFile(reinstallScriptPath, []byte(scriptBody), 0600); err != nil {
+		return fmt.Errorf("failed to write reinstall script: %w", err)
+	}
+
+	// Create a oneshot systemd service whose ExecStart is a FIXED path. The unit
+	// body contains no caller-controlled text.
 	serviceContent := fmt.Sprintf(`[Unit]
 Description=RunOS Node Reinstallation
 After=network.target
@@ -56,14 +85,15 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c '%s && systemctl disable runos-reinstall.service'
+ExecStart=/bin/bash %s
+ExecStartPost=/usr/bin/systemctl disable runos-reinstall.service
 RemainAfterExit=false
 
 [Install]
 WantedBy=multi-user.target
-`, installCmd)
+`, reinstallScriptPath)
 
-	// Write service file (root-only: may embed install command text)
+	// Write service file (root-only: references the reinstall script path)
 	if err := os.WriteFile("/etc/systemd/system/runos-reinstall.service", []byte(serviceContent), 0600); err != nil {
 		return err
 	}

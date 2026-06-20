@@ -86,7 +86,11 @@ func performAutoRenewal() error {
 
 	// Step 2: Connect to Nodeward and request new certificate
 	roslog.I("Connecting to Nodeward for certificate renewal")
-	c, _, cancel, conn := backend.NodewardL2Sec()
+	c, _, cancel, conn, err := backend.NodewardL2Sec()
+	if err != nil {
+		roslog.E("Failed to connect to Nodeward for certificate auto-renewal", err)
+		return fmt.Errorf("connect failed: %w", err)
+	}
 	defer cancel()
 	defer conn.Close()
 

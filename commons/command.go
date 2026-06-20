@@ -27,6 +27,7 @@ var ErrCommandHung = errors.New("command hung")
 // secretAssignRe matches secret-bearing assignments in a command line:
 //   - shell/env style:  PASSWORD=foo, MY_TOKEN='bar', api_secret="baz"
 //   - flag style:       --password foo, --token=bar, -p baz
+//
 // The value (group 2) is replaced with a placeholder so the command name and
 // structure stay legible for debugging while the secret never reaches the log.
 var secretAssignRe = regexp.MustCompile(
@@ -219,6 +220,29 @@ func ExecuteCommandInDetachedSystemdScope(command string) error {
 	}
 
 	roslog.I("Detached command started", "pid", cmd.Process.Pid)
+	return nil
+}
+
+// ExecuteDetachedSystemdScopeArgv launches argv directly (no shell, no string
+// interpolation) inside a detached systemd-run scope so it survives the agent
+// process exiting. Use this for running attacker-influenced inputs (e.g. a
+// fetched script file) where building a shell string would be an injection sink.
+func ExecuteDetachedSystemdScopeArgv(argv ...string) error {
+	if len(argv) == 0 {
+		return fmt.Errorf("ExecuteDetachedSystemdScopeArgv: empty argv")
+	}
+	// systemd-run --scope itself runs argv directly; the target program and its
+	// arguments are passed as discrete argv elements, never concatenated into a
+	// shell command line. --collect cleans up the transient unit on exit.
+	args := append([]string{"--scope", "--collect"}, argv...)
+	cmd := exec.Command("systemd-run", args...)
+
+	if err := cmd.Start(); err != nil {
+		roslog.E("Error starting detached argv command via systemd-run", err)
+		return err
+	}
+
+	roslog.I("Detached argv command started", "pid", cmd.Process.Pid)
 	return nil
 }
 

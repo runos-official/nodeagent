@@ -9,7 +9,10 @@ import (
 
 // GetControlPlaneNodes fetches the current control plane node list from Nodeward.
 func GetControlPlaneNodes() ([]*pb.GetControlPlaneNodesResponse_ControlPlaneNode, error) {
-	c, _, backendCancel, conn := NodewardL2Sec()
+	c, _, backendCancel, conn, err := NodewardL2Sec()
+	if err != nil {
+		return nil, err
+	}
 	defer backendCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

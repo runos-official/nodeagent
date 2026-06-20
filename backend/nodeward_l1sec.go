@@ -41,6 +41,21 @@ func NodewardL1Sec() (l1sec.NodewardClient, context.Context, context.CancelFunc,
 		roslog.E("failed to read l1sec ca cert", err, "ca_file_path", caPath)
 		panic(err)
 	}
+
+	// Pin the L1Sec public CA: it was downloaded over a CDN with no integrity
+	// check, so verify it against the expected sha256 before trusting it as the
+	// registration TLS root. Mismatch with a configured pin is fatal (a MITM of
+	// the CA fetch could otherwise impersonate nodeward -> root RCE). If no pin
+	// is configured we proceed but warn loudly.
+	if pinned, perr := verifyL1SecCAPin(caBytes); perr != nil {
+		roslog.E("l1sec CA pin verification failed; refusing to register", perr, "ca_file_path", caPath)
+		panic(perr)
+	} else if !pinned {
+		roslog.W("l1sec CA is NOT pinned (no mtls.public-ca-sha256 / build pin set); the registration CA is trusted without integrity verification", nil, "ca_file_path", caPath)
+	} else {
+		roslog.I("l1sec CA pin verified")
+	}
+
 	caPool := x509.NewCertPool()
 	if ok := caPool.AppendCertsFromPEM(caBytes); !ok {
 		roslog.E("failed to parse l1sec ca cert", nil, "ca_file_path", caPath)
