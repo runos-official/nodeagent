@@ -7,6 +7,37 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.1.0
+
+Security hardening pass (file permissions, secret logging, instruction-handler
+input validation, transport trust, and connection resilience). No on-wire
+protocol change.
+
+### Security
+- The mTLS private key (`/etc/runos/mtls.key`) and the agent log
+  (`/var/log/runos.log`) are now created `0600` (were world-readable `0644`).
+  The key is also re-tightened to `0600` on every agent startup, so already
+  deployed nodes are remediated on the next restart.
+- Removed cleartext logging of certificate/key PEM material; command and script
+  logging now redacts secret-bearing values (`PASSWORD=` / `TOKEN=` / ...).
+- `RUN_REMOTE_SCRIPT` no longer builds `curl … | bash`: the script id/path is
+  validated and the fetched script runs argv-style (no shell string).
+- `RUN_WEB_REQUEST` blocks loopback / link-local / cloud-metadata targets
+  (dialing the resolved IP to defeat DNS-rebinding) and ignores caller-supplied
+  TLS-skip.
+- `REINSTALL_NODE` writes its command to a root-only `0600` script rather than
+  interpolating it into a systemd unit.
+- `UPDATE_DNSMASQ` (directive allow/deny-list) and `INSTALL_HELM_CHART`
+  (https-only, internal-IP block, name validation) now validate their inputs.
+- The L1Sec public CA is verified against a pinned SHA256 (set at release;
+  warn-only until set). TLS minimum version raised to 1.2.
+
+### Changed
+- The agent now reconnects in-process with capped exponential backoff instead of
+  exiting on a transient stream/connection error and relying on a systemd
+  restart, so network blips no longer cause full process restarts (and a re-run
+  of VPN sync). Dial is bounded by a timeout.
+
 ## v1.0.0
 
 First public release of the RunOS node agent.
