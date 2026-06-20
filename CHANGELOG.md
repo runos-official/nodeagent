@@ -7,6 +7,22 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.1.1
+
+### Fixed
+- `uninstall` no longer stalls for minutes. All package removals are now a single
+  non-interactive `apt-get` (was five separate, lock-contending invocations), and
+  every potentially-blocking step (kubeadm reset, systemctl, netplan, apt) is
+  bounded by `timeout` so a wedged step can't hang the whole uninstall. Also
+  removes the previously-missed `wireguard-tools`. Measured ~12s end to end on a
+  control-plane node (was minutes).
+
+### Security
+- `runos uninstall` now requires `--yes` (or an interactive "yes" confirmation)
+  before it wipes Kubernetes/etcd and reboots, so a bare invocation can't destroy
+  a node by accident. The nodeward `UNINSTALL_NODE` instruction path is
+  unaffected.
+
 ## v1.1.0
 
 Security hardening pass (file permissions, secret logging, instruction-handler
