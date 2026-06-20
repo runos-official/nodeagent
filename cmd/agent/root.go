@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/runos-official/nodeagent/agentstream"
+	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/certificate"
 	syncUc "github.com/runos-official/nodeagent/uc/sync"
@@ -65,6 +66,18 @@ const (
 // services that live for the duration of a single connection.
 func runAgent() {
 	roslog.I("Starting RunOS Node Agent")
+
+	// Fleet remediation: ensure the on-disk mTLS private key is root-only (0600).
+	// The write path (uc/registernode) now creates it 0600, but an already-
+	// registered node never rewrites its key, so an existing world-readable
+	// (0644) mtls.key is tightened here on every boot. The cert/CA stay public.
+	if keyPath := config.GetPrivateKeyPath(); keyPath != "" {
+		if _, err := os.Stat(keyPath); err == nil {
+			if err := os.Chmod(keyPath, 0600); err != nil {
+				roslog.W("Failed to tighten mTLS key permissions on startup", err, "path", keyPath)
+			}
+		}
+	}
 
 	// Top-level context: cancelled only on signal -> ends the whole agent.
 	rootCtx, rootCancel := context.WithCancel(context.Background())
