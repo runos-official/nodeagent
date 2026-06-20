@@ -135,7 +135,7 @@ func SetNodewardHost(nodewardServerHost string) {
 // empty file at that path if it does not yet exist.
 func GetPublicKeyPath() string {
 	caPath := viper.GetString("mtls.crt")
-	createFileIfNotExists(caPath)
+	createFileIfNotExists(caPath, 0644) // public certificate
 	return caPath
 }
 
@@ -143,7 +143,7 @@ func GetPublicKeyPath() string {
 // file at that path if it does not yet exist.
 func GetPrivateKeyPath() string {
 	caPath := viper.GetString("mtls.key")
-	createFileIfNotExists(caPath)
+	createFileIfNotExists(caPath, 0600) // private key: root-only
 	return caPath
 }
 
@@ -151,7 +151,7 @@ func GetPrivateKeyPath() string {
 // file at that path if it does not yet exist.
 func GetCACertPath() string {
 	caPath := viper.GetString("mtls.ca")
-	createFileIfNotExists(caPath)
+	createFileIfNotExists(caPath, 0644) // public CA certificate
 	return caPath
 }
 
@@ -198,10 +198,13 @@ func GetCPDomain() string {
 	return viper.GetString("client.server.cp.domain")
 }
 
-func createFileIfNotExists(filename string) {
+// createFileIfNotExists creates an empty file at filename with the given perm if
+// it does not already exist. Use 0600 for secrets (the mTLS private key) and 0644
+// for public material (certs, CA). It does not relax the mode of an existing file.
+func createFileIfNotExists(filename string, perm os.FileMode) {
 	_, err := os.Stat(filename)
 	if os.IsNotExist(err) {
-		file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL, 0644)
+		file, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL, perm)
 		if err != nil {
 			roslog.E("Failed creating file", err)
 			panic(err)

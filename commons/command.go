@@ -24,13 +24,30 @@ import (
 // on errors.Is(err, ErrCommandHung) rather than matching on message text.
 var ErrCommandHung = errors.New("command hung")
 
+// secretAssignRe matches secret-bearing assignments in a command line:
+//   - shell/env style:  PASSWORD=foo, MY_TOKEN='bar', api_secret="baz"
+//   - flag style:       --password foo, --token=bar, -p baz
+// The value (group 2) is replaced with a placeholder so the command name and
+// structure stay legible for debugging while the secret never reaches the log.
+var secretAssignRe = regexp.MustCompile(
+	`(?i)((?:[A-Za-z_][A-Za-z0-9_]*)?(?:password|passwd|secret|token|apikey|api_key|access_key|auth|credential|bearer|private_key)[A-Za-z0-9_]*\s*[=:]\s*|--?(?:password|passwd|secret|token|apikey|api-key|api_key|auth|credential|bearer)(?:[= ])\s*)(['"]?[^'"\s]+['"]?)`)
+
+// redactSecrets returns command with the values of any secret-bearing
+// assignments masked, so command lines can be logged without leaking passwords,
+// tokens or keys passed inline (a live log previously contained PASSWORD="...").
+// It is conservative: it keeps the command and flag NAMES, redacting only the
+// matched value.
+func redactSecrets(command string) string {
+	return secretAssignRe.ReplaceAllString(command, "${1}[REDACTED]")
+}
+
 // ExecuteCommandStreaming runs a shell command and invokes onLine for every
 // line of combined stdout+stderr as it appears, then returns the full captured
 // output and the command's exit error. Use this when a caller wants to forward
 // progress (e.g. kubeadm phase markers) to the user in real time instead of
 // waiting for the whole command to finish.
 func ExecuteCommandStreaming(command string, onLine func(string)) (string, error) {
-	roslog.I("Executing command (streaming)", "command", command)
+	roslog.I("Executing command (streaming)", "command", redactSecrets(command))
 
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -139,7 +156,7 @@ func ProcessInstallCommandsStatusAware(commandList *l2sec.InstallCommandList) er
 		}
 
 		if err != nil {
-			logMessage := fmt.Sprintf("Command failed: %s\nError: %v\nOutput: %s", cmd.Command, err, res)
+			logMessage := fmt.Sprintf("Command failed: %s\nError: %v\nOutput: %s", redactSecrets(cmd.Command), err, res)
 
 			if cmd.IgnoreFailure {
 				roslog.InstallWarning(logMessage)
@@ -172,7 +189,7 @@ func ProcessInstallCommandsStatusAware(commandList *l2sec.InstallCommandList) er
 // ExecuteCommandGetResponse runs command via /bin/sh and returns its combined
 // output, returning an empty string on error.
 func ExecuteCommandGetResponse(command string) string {
-	roslog.I("Executing command", "command", command)
+	roslog.I("Executing command", "command", redactSecrets(command))
 
 	// Create an *exec.Cmd
 	systemCmd := exec.Command("/bin/sh", "-c", command)
@@ -209,7 +226,12 @@ func ExecuteCommandInDetachedSystemdScope(command string) error {
 // returns its combined output, or an error if the command fails.
 func ExecuteDirectCommandGetResponse(target string, withLog bool, args ...string) (*string, error) {
 	if withLog {
-		roslog.I("Executing direct command", "target", target, "args", args)
+		// Redact each arg: secrets are sometimes passed as a single arg value.
+		redactedArgs := make([]string, len(args))
+		for i, a := range args {
+			redactedArgs[i] = redactSecrets(a)
+		}
+		roslog.I("Executing direct command", "target", target, "args", redactedArgs)
 	}
 
 	// Create an *exec.Cmd
@@ -241,7 +263,7 @@ func executeCommandWithActivityTimeout(command string, inactivityTimeout time.Du
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			roslog.I("Retrying command", "attempt", attempt, "maxRetries", maxRetries, "command", command)
+			roslog.I("Retrying command", "attempt", attempt, "maxRetries", maxRetries, "command", redactSecrets(command))
 		}
 
 		// Create context that we can cancel
@@ -386,11 +408,11 @@ func shouldUseRetryableExecution(command string) bool {
 // ExecuteCommandGetResponse2 runs command and returns both its combined output
 // and any error, using activity-based retries for package-manager commands.
 func ExecuteCommandGetResponse2(command string) (string, error) {
-	roslog.I("Executing command", "command", command)
+	roslog.I("Executing command", "command", redactSecrets(command))
 
 	// Check if this command should use retryable execution with activity monitoring
 	if shouldUseRetryableExecution(command) {
-		roslog.I("Using retryable execution with activity monitoring", "command", command)
+		roslog.I("Using retryable execution with activity monitoring", "command", redactSecrets(command))
 		output, err := executeCommandWithActivityTimeout(command, 60*time.Second, 3)
 
 		// Log output regardless of error
@@ -429,7 +451,7 @@ func ExecuteCommandGetResponse2(command string) (string, error) {
 // three so a hung non-fatal command costs ~60s instead of ~3 minutes.
 func ExecuteCommandGetResponse2Install(ctx context.Context, command string, ignoreFailure bool) (string, error) {
 	// Log to file for debugging/audit trail (with context for phase tagging)
-	roslog.Ictx(ctx, "Executing install command", "command", command)
+	roslog.Ictx(ctx, "Executing install command", "command", redactSecrets(command))
 
 	// Display the command under the progress bar
 	roslog.SetCurrentCommand(command)
@@ -453,9 +475,9 @@ func ExecuteCommandGetResponse2Install(ctx context.Context, command string, igno
 		roslog.Ictx(ctx, "Install command output", "output", output)
 
 		if err != nil {
-			roslog.Ectx(ctx, "Install command failed", err, "command", command)
+			roslog.Ectx(ctx, "Install command failed", err, "command", redactSecrets(command))
 			// Also show on stdout for immediate visibility
-			roslog.InstallError(fmt.Sprintf("Command failed: %s", command))
+			roslog.InstallError(fmt.Sprintf("Command failed: %s", redactSecrets(command)))
 			if len(output) > 0 {
 				roslog.InstallError(fmt.Sprintf("Output: %s", strings.TrimSpace(output)))
 			}
@@ -476,9 +498,9 @@ func ExecuteCommandGetResponse2Install(ctx context.Context, command string, igno
 
 	if err != nil {
 		err = describeExitError(err)
-		roslog.Ectx(ctx, "Install command failed", err, "command", command)
+		roslog.Ectx(ctx, "Install command failed", err, "command", redactSecrets(command))
 		// Also show on stdout for immediate visibility
-		roslog.InstallError(fmt.Sprintf("Command failed: %s", command))
+		roslog.InstallError(fmt.Sprintf("Command failed: %s", redactSecrets(command)))
 		if len(outputString) > 0 {
 			roslog.InstallError(fmt.Sprintf("Output: %s", strings.TrimSpace(outputString)))
 		}

@@ -126,8 +126,9 @@ func updateDnsmasqConfigAtomic(fileContents string) error {
 		roslog.D("Created backup at %s", backupPath)
 	}
 
-	// Write to temporary file first
-	if err := ioutil.WriteFile(tempPath, []byte(fileContents), 0644); err != nil {
+	// Write to temporary file first (root-only; the final config inherits this
+	// mode via the rename below).
+	if err := ioutil.WriteFile(tempPath, []byte(fileContents), 0600); err != nil {
 		return fmt.Errorf("failed to write temporary file: %w", err)
 	}
 
@@ -148,7 +149,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(dst, data, 0644)
+	return ioutil.WriteFile(dst, data, 0600)
 }
 
 // restartDnsmasqService restarts the dnsmasq service gracefully

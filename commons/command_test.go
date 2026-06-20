@@ -157,6 +157,66 @@ func TestExecuteCommandWithActivityTimeout_CleanSuccessNotHung(t *testing.T) {
 	}
 }
 
+func TestRedactSecrets(t *testing.T) {
+	tests := []struct {
+		name      string
+		in        string
+		mustMask  []string // substrings that must NOT appear in the output
+		mustKeep  []string // substrings that must still appear (command/flag names)
+	}{
+		{
+			name:     "env-style password assignment",
+			in:       `PASSWORD="hunter2" apt-get install foo`,
+			mustMask: []string{"hunter2"},
+			mustKeep: []string{"PASSWORD=", "apt-get install foo"},
+		},
+		{
+			name:     "prefixed token var",
+			in:       `MY_TOKEN=abc123 do-thing`,
+			mustMask: []string{"abc123"},
+			mustKeep: []string{"MY_TOKEN=", "do-thing"},
+		},
+		{
+			name:     "flag with equals",
+			in:       `helm install --token=s3cr3t chart`,
+			mustMask: []string{"s3cr3t"},
+			mustKeep: []string{"helm install", "--token=", "chart"},
+		},
+		{
+			name:     "flag with space",
+			in:       `curl --password p@ss https://x`,
+			mustMask: []string{"p@ss"},
+			mustKeep: []string{"curl", "--password", "https://x"},
+		},
+		{
+			name:     "secret colon assignment",
+			in:       `api_secret: topsecret`,
+			mustMask: []string{"topsecret"},
+			mustKeep: []string{"api_secret"},
+		},
+		{
+			name:     "no secret left untouched",
+			in:       `kubectl get pods -n kube-system`,
+			mustKeep: []string{"kubectl get pods -n kube-system"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactSecrets(tc.in)
+			for _, m := range tc.mustMask {
+				if strings.Contains(got, m) {
+					t.Fatalf("redactSecrets(%q) = %q; must not contain secret %q", tc.in, got, m)
+				}
+			}
+			for _, k := range tc.mustKeep {
+				if !strings.Contains(got, k) {
+					t.Fatalf("redactSecrets(%q) = %q; expected to keep %q", tc.in, got, k)
+				}
+			}
+		})
+	}
+}
+
 func TestExecuteCommandWithActivityTimeoutInstall_RetriesOnHang(t *testing.T) {
 	// Two attempts at 150ms each: total wall time should be at least ~300ms.
 	start := time.Now()

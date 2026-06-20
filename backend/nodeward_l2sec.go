@@ -51,6 +51,7 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	}
 
 	tlsConfig := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
 		ServerName:   config.GetNodewardHost(),
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      ca,

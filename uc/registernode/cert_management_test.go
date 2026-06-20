@@ -80,6 +80,44 @@ func TestStorePrivateKey_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestStorePrivateKey_IsRootOnly0600(t *testing.T) {
+	privPEM, _, _, _ := genKeyPairPEM(t)
+	path := filepath.Join(t.TempDir(), "mtls.key")
+
+	if err := StorePrivateKey(privPEM, path); err != nil {
+		t.Fatalf("StorePrivateKey returned error on valid input: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat private key: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("private key mode = %04o, want 0600", perm)
+	}
+}
+
+func TestStorePrivateKey_TightensExisting0644(t *testing.T) {
+	// A pre-existing world-readable key must be corrected to 0600 on next write.
+	privPEM, _, _, _ := genKeyPairPEM(t)
+	path := filepath.Join(t.TempDir(), "mtls.key")
+
+	if err := os.WriteFile(path, []byte("stale"), 0644); err != nil {
+		t.Fatalf("seeding 0644 key: %v", err)
+	}
+	if err := StorePrivateKey(privPEM, path); err != nil {
+		t.Fatalf("StorePrivateKey returned error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat private key: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("private key mode = %04o, want 0600 after rewrite", perm)
+	}
+}
+
 func TestStorePublicKey_RoundTrip(t *testing.T) {
 	_, certPEM, _, cert := genKeyPairPEM(t)
 	path := filepath.Join(t.TempDir(), "mtls.crt")

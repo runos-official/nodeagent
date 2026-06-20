@@ -84,7 +84,9 @@ func ApplyYamlResourceFile(file []byte) error {
 	outputPath := tmpFile.Name()
 	defer os.Remove(outputPath)
 
-	if err := os.WriteFile(outputPath, file, 0644); err != nil {
+	// Write to the handle os.CreateTemp already opened (mode 0600). Avoids a
+	// redundant os.WriteFile that would relax the file to 0644.
+	if _, err := tmpFile.Write(file); err != nil {
 		tmpFile.Close()
 		return fmt.Errorf("failed to write YAML file: %v", err)
 	}

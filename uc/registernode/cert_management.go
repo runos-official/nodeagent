@@ -2,12 +2,21 @@ package registernode
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"github.com/runos-official/nodeagent/roslog"
 	"os"
 )
+
+// shortHash returns the first 8 hex chars of the sha256 of s, a non-reversible
+// fingerprint usable in logs in place of secret/sensitive material.
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:8]
+}
 
 func writeCertificateToFile(cert *x509.Certificate, filename string) error {
 	// Create a new file
@@ -33,12 +42,20 @@ func writeCertificateToFile(cert *x509.Certificate, filename string) error {
 }
 
 func writePrivateKeyToFile(privateKey *rsa.PrivateKey, filename string) error {
-	// Create a new file
-	file, err := os.Create(filename)
+	// Create (or truncate) the file root-only (0600). The private key must never
+	// be world-readable.
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
+
+	// Correct the mode even if the file already existed as 0644 (O_CREATE does
+	// not change the perms of an existing file), so previously-issued keys are
+	// tightened on the next write.
+	if err := os.Chmod(filename, 0600); err != nil {
+		return err
+	}
 
 	// Marshal the private key into its ASN.1 PKCS#1 DER-encoded form
 	privateKeyBytes := x509.MarshalPKCS1PrivateKey(privateKey)
@@ -109,8 +126,10 @@ func StorePublicKey(contents string, path string) error {
 	roslog.I("Storing public key", "path", path)
 	cert, err := convertStringToCertificate(contents)
 	if err != nil {
-		roslog.I("Certificate contents", "contents", contents)
-		roslog.E("failed to load client cert", err)
+		// Never log the PEM bytes (they may be key material on a misrouted
+		// payload). Log only a non-reversible fingerprint + length for triage.
+		roslog.E("failed to load client cert", err,
+			"path", path, "bytes", len(contents), "sha256_8", shortHash(contents))
 		return err
 	}
 

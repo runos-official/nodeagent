@@ -63,8 +63,8 @@ RemainAfterExit=false
 WantedBy=multi-user.target
 `, installCmd)
 
-	// Write service file
-	if err := os.WriteFile("/etc/systemd/system/runos-reinstall.service", []byte(serviceContent), 0644); err != nil {
+	// Write service file (root-only: may embed install command text)
+	if err := os.WriteFile("/etc/systemd/system/runos-reinstall.service", []byte(serviceContent), 0600); err != nil {
 		return err
 	}
 

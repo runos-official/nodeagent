@@ -29,7 +29,7 @@ esac
 
 # Create log directory and file first
 touch /var/log/runos.log
-chmod 644 /var/log/runos.log
+chmod 600 /var/log/runos.log
 
 # Function to log both to console and file
 log_output() {
@@ -121,7 +121,7 @@ cat << EOF > $LOGROTATE_FILE
     delaycompress
     missingok
     notifempty
-    create 644 root root
+    create 600 root root
     postrotate
         systemctl reload runos.service > /dev/null 2>&1 || true
     endscript

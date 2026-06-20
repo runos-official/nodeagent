@@ -110,9 +110,10 @@ backend k8s_api_backend
 		config += fmt.Sprintf("    server %s %s:%s check\n", serverName, host, port)
 	}
 
-	// Write the new config to a temporary file
+	// Write the new config to a temporary file (root-only; the final config
+	// inherits this mode via the rename below).
 	tempFile := haproxyConfigPath + ".new"
-	if err := os.WriteFile(tempFile, []byte(config), 0644); err != nil {
+	if err := os.WriteFile(tempFile, []byte(config), 0600); err != nil {
 		return fmt.Errorf("failed to write new HAProxy config: %w", err)
 	}
 
