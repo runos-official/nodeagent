@@ -1,0 +1,106 @@
+package backend
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"flag"
+	"fmt"
+	"github.com/runos-official/nodeagent/config"
+	"github.com/runos-official/nodeagent/l2sec"
+	"github.com/runos-official/nodeagent/roslog"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/credentials"
+	"os"
+	"sync"
+	"time"
+)
+
+var (
+	addrL2Sec *string
+	onceL2Sec sync.Once
+)
+
+// NodewardL2Sec dials the L2Sec (mTLS) operational channel and returns the
+// client plus the context, cancel func and connection the caller must clean up.
+func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc, *grpc.ClientConn) {
+	onceL2Sec.Do(func() {
+		connectionString := fmt.Sprintf("%s:%d", config.GetNodewardHost(), 9192)
+		roslog.I("Connecting to nodeward L2", "connection_string", connectionString)
+		addrL2Sec = flag.String("addr_nodeward_l2sec", connectionString, "the address to connect to")
+		flag.Parse()
+	})
+
+	cert, err := tls.LoadX509KeyPair(config.GetPublicKeyPath(), config.GetPrivateKeyPath())
+	if err != nil {
+		roslog.E("failed to load client cert", err)
+		panic(err)
+	}
+
+	ca := x509.NewCertPool()
+	caFilePath := config.GetCACertPath()
+	caBytes, err := os.ReadFile(caFilePath)
+	if err != nil {
+		roslog.E("failed to read ca cert", err, "ca_file_path", caFilePath)
+		panic(err)
+	}
+	if ok := ca.AppendCertsFromPEM(caBytes); !ok {
+		roslog.E("failed to parse ca cert", nil, "ca_file_path", caFilePath)
+		panic("failed to parse ca file")
+	}
+
+	tlsConfig := &tls.Config{
+		ServerName:   config.GetNodewardHost(),
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      ca,
+	}
+
+	attemptCount := 0
+	conn, err := grpc.Dial(*addrL2Sec,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
+		grpc.WithDefaultServiceConfig(`{
+            "serviceConfig": {
+                "healthCheckConfig": {
+                    "serviceName": ""
+                },
+                "retryPolicy": {
+                    "MaxAttempts": 0,
+                    "InitialBackoff": "0.1s",
+                    "MaxBackoff": "60s",
+                    "BackoffMultiplier": 2.0,
+                    "RetryableStatusCodes": [
+                        "UNAVAILABLE"
+                    ]
+                }
+            }
+        }`),
+		grpc.WithBlock(),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  100 * time.Millisecond,
+				Multiplier: 1.6,
+				Jitter:     0.2,
+				MaxDelay:   10 * time.Second,
+			},
+		}),
+		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			attemptCount++
+			roslog.I("Attempting connection", "attempt", attemptCount, "address", *addrL2Sec)
+			err := invoker(ctx, method, req, reply, cc, opts...)
+			if err != nil {
+				roslog.W("Connection attempt failed", err, "attempt", attemptCount)
+			}
+			return err
+		}),
+	)
+	if err != nil {
+		roslog.E("did not connect", err)
+		panic(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	c := l2sec.NewNodewardClient(conn)
+
+	return c, ctx, cancel, conn
+}

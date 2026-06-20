@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+  changelog:
+    name: Changelog extraction
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Verify changelog entries are extractable
+        run: |
+          # Extract all version headers from CHANGELOG.md
+          versions=$(grep -oP '^## \Kv\d+\.\d+\.\d+' CHANGELOG.md)
+          if [ -z "$versions" ]; then
+            echo "No version entries found in CHANGELOG.md"
+            exit 0
+          fi
+
+          failed=0
+          for version in $versions; do
+            notes=$(awk "/^## ${version}/ { found=1; next } found && /^## / { exit } found { print }" CHANGELOG.md | awk 'NF{p=1} p')
+            if [ -z "$notes" ]; then
+              echo "FAIL: No content extracted for ${version}"
+              failed=1
+            else
+              echo "OK: ${version} — $(echo "$notes" | wc -l | tr -d ' ') lines"
+            fi
+          done
+
+          if [ "$failed" -eq 1 ]; then
+            exit 1
+          fi
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o /dev/null .

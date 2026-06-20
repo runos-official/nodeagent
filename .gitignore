@@ -1,0 +1,66 @@
+#Project Stuff
+shared
+nodeagent
+build
+
+
+# IntelliJ IDEA / GoLand specific files
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Local AI-assistant / agent state (never shipped publicly)
+.claude/
+CLAUDE.md
+AGENTS.md
+
+# Compiled binary output
+/bin/
+/pkg/
+
+# Dependency directories (remove these lines if you prefer to check in your vendor directory)
+vendor/
+Gopkg.lock
+# NOTE: go.sum is intentionally committed (module checksum lock for reproducible,
+# supply-chain-verifiable builds) and must NOT be ignored.
+
+# Output of the go coverage tool
+*.cover
+
+# Node.js dependencies (if using Node.js in your project)
+node_modules/
+
+# macOS specific files
+.DS_Store
+
+# Windows specific files
+Thumbs.db
+Desktop.ini
+
+# Linux specific files
+.*.swp
+.*.swo
+*~
+
+# Log files
+*.log
+
+# Environment files
+.env
+.env.local
+
+# Private keys
+*.pem
+
+# Certificate files
+*.crt
+*.key
+
+# Ignore all .env files
+.env*
+
+# Ignore sensitive data
+secrets.yaml
+
+cache

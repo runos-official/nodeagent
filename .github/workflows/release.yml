@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          # A tag with a "-" suffix (e.g. v0.24.0-rc.1) is a semver pre-release:
+          # publish + pinnable by exact version, but excluded from "Latest release".
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Build linux binaries (amd64 + arm64)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          LDFLAGS="-s -w -X github.com/runos-official/nodeagent/version.Version=${VERSION}"
+          for arch in amd64 arm64; do
+            echo "Building nodeagent-linux-${arch}..."
+            CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
+              go build -trimpath -ldflags "${LDFLAGS}" -o "nodeagent-linux-${arch}" .
+          done
+          ls -l nodeagent-linux-amd64 nodeagent-linux-arm64
+
+      - name: Generate checksums
+        run: |
+          sha256sum nodeagent-linux-* > checksums.txt
+          echo "Generated checksums:"
+          cat checksums.txt
+
+      # Keyless (Sigstore/OIDC) build-provenance attestation for both released
+      # binaries. Binds each binary's sha256 to this workflow's OIDC identity, so
+      # a downstream verifier (`gh attestation verify nodeagent-linux-amd64
+      # --repo runos-official/nodeagent`) can prove the binary is the exact
+      # artifact this pipeline produced. No long-lived secret, safe for a public repo.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            nodeagent-linux-amd64
+            nodeagent-linux-arm64
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          # Print lines after "## vX.Y.Z" until the next "## " heading or EOF.
+          NOTES=$(awk "
+            /^## ${VERSION}/ { found=1; next }
+            found && /^## /  { exit }
+            found            { print }
+          " CHANGELOG.md | awk 'NF{p=1} p')
+          if [ -z "$NOTES" ]; then
+            echo "No changelog entry found for ${VERSION}, using auto-generated notes"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "$NOTES" > release_notes.txt
+          fi
+
+      - name: Create GitHub Release (draft)
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          body_path: ${{ steps.notes.outputs.found == 'true' && 'release_notes.txt' || '' }}
+          generate_release_notes: ${{ steps.notes.outputs.found != 'true' }}
+          files: |
+            nodeagent-linux-amd64
+            nodeagent-linux-arm64
+            checksums.txt
+          # Tags containing "-" (semver pre-release suffix: -rc.1, -alpha, ...)
+          # are marked as GitHub prereleases. Prereleases are excluded from the
+          # repo's "Latest release" pointer, so consumers tracking latest keep
+          # getting the most recent stable; testers opt in by pinning the exact tag.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # The repo has Immutable Releases enabled: assets cannot be uploaded
+          # after a release is published. Create as a draft so the asset upload
+          # succeeds, then flip to published in the next step.
+          draft: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false
