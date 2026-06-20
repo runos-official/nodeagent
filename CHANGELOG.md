@@ -7,6 +7,21 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.0.0
+
+First public release of the RunOS node agent.
+
+- Source-available under the Elastic License 2.0.
+- Published as attested `linux/amd64` + `linux/arm64` binaries on GitHub
+  Releases, built by GitHub Actions on a `v*` tag with a keyless Sigstore
+  build-provenance attestation and a `checksums.txt`. The installer downloads the
+  exact release the control plane selects and verifies its checksum before
+  installing.
+- Pre-release tags (`-rc.N`) publish a hidden release candidate: pushed and
+  pinnable by exact version, and excluded from the "Latest release" pointer.
+- Verify a released binary with:
+  `gh attestation verify nodeagent-linux-amd64 --repo runos-official/nodeagent`.
+
 ## v0.23.17
 
 Baseline of the public release pipeline.
