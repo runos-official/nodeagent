@@ -7,6 +7,38 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.2.0
+
+Manual-install robustness: defensive preflight, honest failure reporting, clear
+actionable errors, and Ubuntu 26.04 support. Validated by real installs on
+Ubuntu 24.04 and 26.04.
+
+### Added
+- **Ubuntu 26.04 support.** Preflight now admits 22.04/24.04/**26.04** (was a
+  hard block on anything but 22.04/24.04). A unified `/etc/os-release` parser
+  (ID + VERSION_ID) replaces the two divergent parsers; a genuinely-unsupported
+  OS fails with a message naming the detected OS + the supported set. Validated:
+  a full install on Ubuntu 26.04 reaches a Ready control-plane node (k8s 1.35.4,
+  containerd 2.2.2).
+- **Preflight checks** with clear remedies: not-root, CPU arch (amd64/arm64),
+  swap enabled, required ports in use (6443/10250/2379/2380/6446 + udp
+  51820/8472), clock/NTP skew, and Nodeward host:port reachability (classifies
+  DNS-fail vs refused vs firewall). Cheap/local checks run before network ones.
+
+### Fixed
+- **Honest failure reporting (the "install said success but the node never came
+  up" bug).** The on-node installer now checks the exit code of every step
+  (register + install were previously unchecked) and only prints the success
+  banner if all passed; otherwise it prints a `FAILED: <step>` block and exits
+  non-zero. The `install`/`register` cobra commands now exit non-zero on failure
+  (were exit 0), `log.Fatalf`/`panic` on recoverable errors are replaced with a
+  structured `FAILED: <step> — Cause — Try` block, and gRPC registration errors
+  map to actionable messages (bad/expired token, bad --aid, Nodeward
+  unreachable).
+- **Register flag validation:** empty/missing `--token`/`--aid`/`--server` are
+  rejected up front (an empty `--server` no longer silently persists an empty
+  Nodeward host).
+
 ## v1.1.1
 
 ### Fixed
