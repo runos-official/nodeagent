@@ -7,6 +7,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.5.2
+
+### Fixed
+- **`runos uninstall` now actually removes `/etc/runos` (the node's identity).**
+  The full uninstall wiped Kubernetes, WireGuard, packages and network but LEFT
+  `/etc/runos/config.yaml` (the NID) and the mTLS client cert + CA behind, even
+  though the function's contract said a full uninstall "clears RunOS
+  configuration and certificates" (it was never implemented). So an uninstalled
+  node still looked registered, and the NEXT install was correctly BLOCKED by the
+  `already-registered` preflight check. Uninstall now removes `/etc/runos`, so
+  uninstall -> reinstall works without a manual `sudo rm -rf /etc/runos`.
+
 ## v1.5.1
 
 ### Fixed

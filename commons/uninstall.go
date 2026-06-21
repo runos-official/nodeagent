@@ -143,8 +143,15 @@ func Uninstall(full bool) error {
 	step("systemctl disable runos || true")
 	step("rm -f /etc/systemd/system/runos.service || true")
 	if full {
-		step("systemctl daemon-reload || true")
 		step("timeout 30 systemctl stop runos || true")
+		step("systemctl daemon-reload || true")
+		// Clear the node's RunOS identity: /etc/runos holds config.yaml (the NID)
+		// plus the mTLS client cert + CA. The contract above ("when full is true it
+		// also clears RunOS configuration and certificates") was never actually
+		// implemented, so these survived every uninstall and the NEXT install was
+		// BLOCKED by the already-registered preflight check. An uninstall that
+		// DESTROYS the node must remove its identity too, leaving a clean slate.
+		step("rm -rf /etc/runos || true")
 	}
 
 	if len(failed) > 0 {
