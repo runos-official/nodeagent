@@ -11,6 +11,13 @@ import (
 // `runos install >/dev/null` still surfaces failures.
 var stderr io.Writer = os.Stderr
 
+// SupportLine is appended to operator-facing failure output (Fail, and the
+// preflight summary) so a user who hits a genuine RunOS bug — rather than an
+// unmet environment prerequisite — knows how to reach us. Centralized here so
+// the wording is identical everywhere it appears, and appears exactly once per
+// failure report.
+const SupportLine = "If you believe this is a RunOS problem rather than an environment issue, email support@runos.com with the output above and we will fix it ASAP."
+
 // Fail prints the canonical operator-facing failure block to stderr AND records
 // it as a structured error log line (durable, visible in `runos logs`). It is
 // the single failure-reporting primitive used by the install/register paths so
@@ -39,6 +46,7 @@ func Fail(step, cause, remedy string) error {
 		fmt.Fprintf(stderr, "  Try:   %s\n", remedy)
 	}
 	fmt.Fprintf(stderr, "  Full log: %s\n", logFilePath)
+	fmt.Fprintf(stderr, "  %s\n", SupportLine)
 	redrawProgress()
 
 	return fmt.Errorf("%s: %s", step, cause)

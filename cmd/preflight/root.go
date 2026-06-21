@@ -23,97 +23,30 @@ import (
 // allowed: the nodeward probe is skipped with a warning rather than failing.
 var server string
 
+// cdnURL is the base CDN URL the installer pulls artifacts (the L1Sec CA, etc.)
+// from, passed via `runos preflight --cdn <url>`. Empty -> CDN reachability is
+// probed against a default/derived host or skipped with a warning.
+var cdnURL string
+
 var RootCmd = &cobra.Command{
 	Use:   "preflight",
 	Short: "Check if the system is ready for installation",
 	Long:  `Performs pre-flight checks to ensure the system is ready for node registration and installation`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runPreflightChecks(); err != nil {
-			// Durable record for `runos logs`, then the terminal message.
-			roslog.E("preflight check failed", err)
-			fmt.Fprintf(os.Stderr, "Preflight check failed: %v\n", err)
+			// runPreflightChecks has already printed the detailed findings and the
+			// support line; just exit non-zero.
 			os.Exit(1)
 		}
-		fmt.Println("System is ready for installation")
+		fmt.Println("\nSystem is ready for installation.")
 	},
 }
 
 func init() {
 	RootCmd.PersistentFlags().StringVarP(&server, "server", "s", "",
 		"Nodeward host this node will register against (probed for reachability)")
-}
-
-func runPreflightChecks() error {
-	// Check if preflight checks should be skipped (dev mode)
-	if os.Getenv("RUNOS_DEV_SKIP_PREFLIGHT") == "1" {
-		fmt.Println("RUNOS_DEV_SKIP_PREFLIGHT=1 is set, skipping preflight checks")
-		return nil
-	}
-
-	// Run the cheapest, most fundamental check first: everything downstream
-	// (writing /etc/runos, modprobe, apt, kubeadm) needs root, and a non-root
-	// run otherwise fails deep inside with a cryptic permission error.
-	if err := checkRoot(); err != nil {
-		return err
-	}
-
-	// Local, cheap checks before any network I/O so the fast failures fire first.
-	if err := checkArch(); err != nil {
-		return err
-	}
-
-	if err := checkSystemRequirements(); err != nil {
-		return err
-	}
-
-	if err := checkSwap(); err != nil {
-		return err
-	}
-
-	if err := checkPortsFree(); err != nil {
-		return err
-	}
-
-	if err := checkRebootRequired(); err != nil {
-		return err
-	}
-
-	if err := checkPackageManagerLocks(); err != nil {
-		return err
-	}
-
-	if err := checkKernelModules(); err != nil {
-		return err
-	}
-
-	if err := checkConflictingServices(); err != nil {
-		return err
-	}
-
-	// Clock skew breaks TLS handshakes and apt Release-file validation, so check
-	// it before the network checks (which would otherwise fail cryptically).
-	if err := checkClockSkew(); err != nil {
-		return err
-	}
-
-	// Network checks last. DNS before HTTPS so a broken resolver fails fast.
-	if err := checkDNSResolution(); err != nil {
-		return err
-	}
-
-	if err := checkNetworkConnectivity(); err != nil {
-		return err
-	}
-
-	if err := checkNodewardReachable(); err != nil {
-		return err
-	}
-
-	if err := checkBrokenAptSources(); err != nil {
-		return err
-	}
-
-	return nil
+	RootCmd.PersistentFlags().StringVar(&cdnURL, "cdn", "",
+		"Base CDN URL the installer pulls artifacts from (probed for reachability)")
 }
 
 // checkRoot ensures we are running as the effective root user. Almost every
@@ -343,41 +276,17 @@ func isFileLocked(lockPath string) bool {
 	return false
 }
 
-// checkSystemRequirements checks if the system meets minimum requirements
-func checkSystemRequirements() error {
-	// Check CPU count
-	if err := checkCPUCount(); err != nil {
-		return err
-	}
-
-	// Check RAM
-	if err := checkRAM(); err != nil {
-		return err
-	}
-
-	// Check disk space
-	if err := checkDiskSpace(); err != nil {
-		return err
-	}
-
-	// Check OS version
-	if err := checkOSVersion(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // checkCPUCount ensures at least 2 CPUs are available
 func checkCPUCount() error {
 	cpuCount := runtime.NumCPU()
 	if cpuCount < 2 {
-		return fmt.Errorf("insufficient CPU cores: found %d, need at least 2", cpuCount)
+		return fmt.Errorf("insufficient CPU cores: found %d, need at least 2\n\nResize the node to >=2 vCPU and re-run", cpuCount)
 	}
 	return nil
 }
 
-// checkRAM ensures at least 3.5GB of RAM is available
+// checkRAM ensures at least 3.5GB of total RAM. (Available RAM + memory pressure
+// are checked separately, as an advisory, by checkRamAvailableAndPressure.)
 func checkRAM() error {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
@@ -402,30 +311,12 @@ func checkRAM() error {
 			memGB := float64(memBytes) / 1000 / 1000 / 1000
 
 			if memGB < 3.5 {
-				return fmt.Errorf("insufficient RAM: found %.1f GB, need at least 3.5 GB", memGB)
+				return fmt.Errorf("insufficient RAM: found %.1f GB, need at least 3.5 GB\n\nResize the node to >=4 GB and re-run", memGB)
 			}
 			return nil
 		}
 	}
 	return fmt.Errorf("could not determine RAM size")
-}
-
-// checkDiskSpace ensures at least 25GB of disk space is available on root partition
-func checkDiskSpace() error {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs("/", &stat); err != nil {
-		return fmt.Errorf("failed to get disk space info: %w", err)
-	}
-
-	// Available space in bytes
-	availableBytes := stat.Bavail * uint64(stat.Bsize)
-	// Use decimal GB (base 10) to match df -H output
-	availableGB := availableBytes / 1000 / 1000 / 1000
-
-	if availableGB < 25 {
-		return fmt.Errorf("insufficient disk space: found %d GB available, need at least 25 GB", availableGB)
-	}
-	return nil
 }
 
 // supportedUbuntuVersions is the set of Ubuntu LTS releases the installer
@@ -484,40 +375,6 @@ func verifyOSSupported(rel commons.OSRelease) error {
 	return nil
 }
 
-// checkNetworkConnectivity ensures the system can reach required external endpoints
-func checkNetworkConnectivity() error {
-	endpoints := []struct {
-		name string
-		url  string
-	}{
-		{"Kubernetes packages", "https://pkgs.k8s.io"},
-		{"Helm Cilium repo", "https://helm.cilium.io"},
-		{"GitHub", "https://github.com"},
-		{"Kubernetes registry", "https://registry.k8s.io"},
-		{"Docker Hub", "https://registry-1.docker.io"},
-	}
-
-	for _, ep := range endpoints {
-		cmd := exec.Command("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-			"--connect-timeout", "10", "--max-time", "15", ep.url)
-		output, err := cmd.Output()
-
-		if err != nil {
-			return fmt.Errorf("cannot reach %s (%s): network timeout or connection refused\n\nCheck firewall rules, DNS settings, or proxy configuration", ep.name, ep.url)
-		}
-
-		// Accept 2xx, 3xx as success. Also accept 401/403/404 since they prove
-		// the server is reachable (registries often return these at root URL)
-		code := string(output)
-		codeInt, _ := strconv.Atoi(code)
-		if codeInt == 0 || (codeInt >= 500) {
-			return fmt.Errorf("cannot reach %s (%s): received HTTP %s", ep.name, ep.url, code)
-		}
-	}
-
-	return nil
-}
-
 // checkDNSResolution ensures DNS is working using Go's native resolver
 func checkDNSResolution() error {
 	domains := []string{"github.com", "pkgs.k8s.io", "helm.cilium.io"}
@@ -532,33 +389,6 @@ func checkDNSResolution() error {
 	return nil
 }
 
-// checkKernelModules ensures required kernel modules can be loaded
-func checkKernelModules() error {
-	modules := []string{"br_netfilter", "overlay", "nf_conntrack"}
-
-	for _, mod := range modules {
-		cmd := exec.Command("modprobe", "--dry-run", mod)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("kernel module '%s' cannot be loaded\n\nThis may require a different kernel or missing kernel headers", mod)
-		}
-	}
-
-	// Check wireguard separately as it's critical. WireGuard is in-kernel on
-	// Linux 5.6+, so all supported Ubuntu LTS releases have it; reference the
-	// detected release + kernel rather than a hardcoded version.
-	cmd := exec.Command("modprobe", "--dry-run", "wireguard")
-	if err := cmd.Run(); err != nil {
-		rel := readOSReleaseOrEmpty()
-		release := rel.VersionID
-		if release == "" {
-			release = "this system"
-		}
-		return fmt.Errorf("WireGuard kernel module not available (running Ubuntu %s on kernel %s)\n\nOn supported Ubuntu LTS releases WireGuard is in-kernel. Try: sudo modprobe wireguard\nIf that fails, install linux-modules-extra-$(uname -r) or boot the generic/HWE kernel, then retry", release, unameRelease())
-	}
-
-	return nil
-}
-
 // unameRelease returns the running kernel release (uname -r), or "unknown".
 func unameRelease() string {
 	out, err := exec.Command("uname", "-r").Output()
@@ -566,55 +396,4 @@ func unameRelease() string {
 		return "unknown"
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// checkBrokenAptSources checks for broken apt sources that would cause apt-get update to fail
-func checkBrokenAptSources() error {
-	cmd := exec.Command("apt-get", "update", "-qq")
-	output, err := cmd.CombinedOutput()
-
-	if err != nil {
-		outputStr := string(output)
-		// Look for specific error patterns
-		if strings.Contains(outputStr, "does not have a Release file") ||
-			strings.Contains(outputStr, "404  Not Found") {
-			return fmt.Errorf("broken APT sources detected:\n%s\n\nRemove or fix the broken repository in /etc/apt/sources.list.d/", outputStr)
-		}
-		return fmt.Errorf("apt-get update failed: %s", outputStr)
-	}
-
-	return nil
-}
-
-// checkConflictingServices checks for services that might interfere with installation
-func checkConflictingServices() error {
-	conflicts := []struct {
-		service string
-		warning string
-	}{
-		{"k3s", "K3s is installed and may conflict with kubeadm"},
-		{"k0s", "K0s is installed and may conflict with kubeadm"},
-		{"microk8s", "MicroK8s is installed and may conflict with kubeadm"},
-		{"docker", "Docker is installed (containerd will be used instead - this is just a warning)"},
-	}
-
-	var warnings []string
-	for _, c := range conflicts {
-		cmd := exec.Command("systemctl", "is-active", "--quiet", c.service)
-		if cmd.Run() == nil {
-			warnings = append(warnings, c.warning)
-		}
-	}
-
-	// Check for existing kubernetes installation
-	if _, err := os.Stat("/etc/kubernetes/admin.conf"); err == nil {
-		return fmt.Errorf("existing Kubernetes installation detected at /etc/kubernetes/\n\nRun 'kubeadm reset -f' to clean up first")
-	}
-
-	// Warnings are non-fatal, just log them
-	if len(warnings) > 0 {
-		fmt.Printf("Warnings:\n- %s\n", strings.Join(warnings, "\n- "))
-	}
-
-	return nil
 }
