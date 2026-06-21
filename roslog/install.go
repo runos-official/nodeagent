@@ -2,15 +2,16 @@ package roslog
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
 
-// ANSI color codes
-const (
+// ANSI color codes. These are package vars (not consts) so coloring can be
+// switched off at startup when the relevant stream is not a TTY or NO_COLOR is
+// set (see colors.go). Downstream code reads roslog.Color* and inherits this.
+var (
 	ColorReset   = "\033[0m"
 	ColorRed     = "\033[31m"
 	ColorGreen   = "\033[32m"
@@ -173,6 +174,13 @@ func (p *InstallProgress) render() {
 		return
 	}
 
+	// Non-TTY (piped/CI/systemd): skip the \r + cursor-movement live bar
+	// entirely. The Install{Info,Success,Warning,Error} lines still print as
+	// plain newline-terminated output, which is what a captured log wants.
+	if !progressIsTTY() {
+		return
+	}
+
 	// If we currently have a command line displayed, move cursor up to the progress bar line
 	if p.hasCmdLine {
 		fmt.Print("\033[1A\r") // Move up one line and return to start
@@ -331,6 +339,11 @@ func clearProgressLine() {
 		return
 	}
 
+	// No live bar on non-TTY, so nothing to clear.
+	if !progressIsTTY() {
+		return
+	}
+
 	installProgress.mu.Lock()
 	defer installProgress.mu.Unlock()
 
@@ -361,28 +374,4 @@ func IsInstallProgressActive() bool {
 	progressMu.Lock()
 	defer progressMu.Unlock()
 	return installProgress != nil && installProgress.isActive
-}
-
-// DisableColors disables color output (for CI/non-TTY environments)
-func DisableColors() {
-	// This would be implemented by setting all color constants to empty strings
-	// For now, we'll detect TTY automatically
-}
-
-func init() {
-	// Auto-detect if stdout is a TTY
-	// If not, we could disable colors automatically
-	if !isTTY() {
-		// Could disable colors here, but for now we'll keep them
-		// since many modern CI systems support ANSI colors
-	}
-}
-
-// isTTY checks if stdout is a terminal
-func isTTY() bool {
-	fileInfo, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return (fileInfo.Mode() & os.ModeCharDevice) != 0
 }

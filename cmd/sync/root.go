@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"fmt"
 	"github.com/spf13/cobra"
 )
 
@@ -11,9 +10,16 @@ func init() {
 
 var RootCmd = &cobra.Command{
 	Use:   "sync",
-	Short: "Manually run a sync",
+	Short: "Manually resynchronize node state",
+	Long: `Manually resynchronize this node's state with the Nodeward control plane.
 
-	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Not supported")
+Run a subcommand to choose what to sync (for example, WireGuard VPN peers).`,
+	Example: "  sudo runos sync vpn",
+	// No positional args: bare `runos sync` lists its subcommands via Help below.
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// No subcommand given: show help so the operator sees the available
+		// sync targets instead of a misleading "Not supported" success.
+		return cmd.Help()
 	},
 }

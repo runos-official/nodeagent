@@ -14,4 +14,5 @@ var RootCmd = &cobra.Command{
 func init() {
 	// Add subcommands
 	RootCmd.AddCommand(renewCmd)
+	RootCmd.AddCommand(statusCmd)
 }

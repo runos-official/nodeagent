@@ -7,6 +7,39 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.4.0
+
+CLI quality pass: every `runos` subcommand audited (132 findings) and brought to
+an enterprise bar — correct exit codes, no panics, single clean failure block,
+consistent stdout/stderr, optional `--json`, and TTY-aware color. Validated live
+on registered + unregistered nodes.
+
+### Added
+- `--json` output for `status`, `version`, `logs` (raw JSONL), `etcd list`,
+  `kubeproxy list`; `runos --version`/`-v`.
+- TTY/`NO_COLOR`-aware coloring: piped/redirected/CI/systemd output is now plain
+  text automatically (no raw ANSI escapes); interactive terminals keep color.
+- `Args: cobra.NoArgs` on commands that take no positionals, so a stray argument
+  errors with a non-zero exit instead of being silently ignored.
+
+### Fixed
+- **No more panics on recoverable conditions.** `backend.NodewardL2Sec()` returns
+  cert/key/CA load errors instead of `panic()`, so `agent`/`test`/`status`/
+  `certificate renew` on an unregistered or half-installed node give a clear
+  message and a non-zero exit rather than a Go stack trace.
+- **Correct exit codes.** `status`, `sync vpn`, `etcd list/remove`, `kubeproxy
+  list/refresh`, `update`, `uninstall`, `certificate renew`, `test`, `agent` were
+  `Run` (always exit 0); converted to `RunE` so a real failure exits non-zero
+  (CI/`&&` gating now works).
+- **One failure block, not three.** Root sets `SilenceUsage`/`SilenceErrors` and
+  failures route through a single `roslog.Fail` block (no duplicate generic line,
+  no cobra usage dump).
+- **Real bugs:** `register --control-plane` was parsed but ignored; `status`
+  wrote a remote nodelog on every read; `uninstall` reported success even when
+  destructive steps failed; `setconfig` couldn't create config on a fresh node;
+  `etcd remove` had an else/Help() control-flow bug; `update`/`kubeproxy` reported
+  success on no-op. All fixed. Diagnostics now go to stderr, data to stdout.
+
 ## v1.3.0
 
 Install-flow robustness, round 2: catch almost everything in preflight before

@@ -2,38 +2,96 @@ package kubeproxy
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
 	"os"
+	"sort"
 	"strings"
 
+	"github.com/runos-official/nodeagent/roslog"
 	"github.com/spf13/cobra"
 )
 
 var (
 	configFile string
+	listJSON   bool
 )
+
+// Backend is the stable, machine-readable shape of a single HAProxy backend
+// emitted by `runos kubeproxy list --json`.
+type Backend struct {
+	Name    string   `json:"name"`
+	Servers []Server `json:"servers"`
+}
+
+// Server is a single server line inside an HAProxy backend.
+type Server struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
 
 var listBackends = &cobra.Command{
 	Use:   "list",
 	Short: "List HAProxy backend servers",
-	Run: func(cmd *cobra.Command, args []string) {
+	Long: `List the backends defined in the local HAProxy configuration and the servers
+in each, parsed from the HAProxy config file (default /etc/haproxy/haproxy.cfg).
+
+Use --json for stable machine-readable output suitable for scripting.`,
+	Example: `  runos kubeproxy list
+  runos kubeproxy list --json
+  runos kubeproxy list --config /etc/haproxy/haproxy.cfg`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
 		backends, err := getHAProxyBackends(configFile)
 		if err != nil {
-			cmd.Println("Error listing HAProxy backends:", err)
-			return
+			if errors.Is(err, os.ErrNotExist) {
+				return roslog.Fail("List HAProxy backends",
+					"HAProxy config not found at "+configFile,
+					"run `runos kubeproxy refresh` to generate it, or pass --config with the correct path")
+			}
+			return roslog.Fail("List HAProxy backends", err.Error(),
+				"confirm the HAProxy config path is readable, then retry")
 		}
 
-		if len(backends) == 0 {
-			cmd.Println("No HAProxy backends found")
-			return
+		// Sort backend names for deterministic output.
+		names := make([]string, 0, len(backends))
+		for name := range backends {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		if listJSON {
+			out := make([]Backend, 0, len(names))
+			for _, name := range names {
+				servers := make([]Server, 0, len(backends[name]))
+				for _, s := range backends[name] {
+					servers = append(servers, Server{Name: s.name, Address: s.address})
+				}
+				out = append(out, Backend{Name: name, Servers: servers})
+			}
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(out); err != nil {
+				return roslog.Fail("List HAProxy backends", err.Error(),
+					"this is an internal encoding error; re-run without --json and report it")
+			}
+			return nil
+		}
+
+		if len(names) == 0 {
+			// Diagnostic note belongs on stderr, not stdout.
+			cmd.PrintErrln("No HAProxy backends found")
+			return nil
 		}
 
 		cmd.Println("HAProxy backends:")
-		for backendName, servers := range backends {
-			cmd.Printf("Backend: %s\n", backendName)
-			for _, server := range servers {
+		for _, name := range names {
+			cmd.Printf("Backend: %s\n", name)
+			for _, server := range backends[name] {
 				cmd.Printf("  Server: %s, Address: %s\n", server.name, server.address)
 			}
 		}
+		return nil
 	},
 }
 
@@ -93,4 +151,5 @@ func getHAProxyBackends(configPath string) (map[string][]serverInfo, error) {
 
 func init() {
 	listBackends.Flags().StringVar(&configFile, "config", "/etc/haproxy/haproxy.cfg", "Path to HAProxy configuration file")
+	listBackends.Flags().BoolVar(&listJSON, "json", false, "Output backends as JSON")
 }

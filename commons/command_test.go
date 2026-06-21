@@ -159,10 +159,10 @@ func TestExecuteCommandWithActivityTimeout_CleanSuccessNotHung(t *testing.T) {
 
 func TestRedactSecrets(t *testing.T) {
 	tests := []struct {
-		name      string
-		in        string
-		mustMask  []string // substrings that must NOT appear in the output
-		mustKeep  []string // substrings that must still appear (command/flag names)
+		name     string
+		in       string
+		mustMask []string // substrings that must NOT appear in the output
+		mustKeep []string // substrings that must still appear (command/flag names)
 	}{
 		{
 			name:     "env-style password assignment",

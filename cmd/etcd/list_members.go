@@ -1,60 +1,114 @@
 package etcd
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"text/tabwriter"
+
 	"github.com/runos-official/nodeagent/k8s"
+	"github.com/runos-official/nodeagent/roslog"
 	"github.com/spf13/cobra"
 )
 
+var listJSON bool
+
 var listMembers = &cobra.Command{
 	Use:   "list",
-	Short: "List the etcd members with detailed cluster information",
-	Run: func(cmd *cobra.Command, args []string) {
+	Short: "List etcd members with detailed cluster information",
+	Long: `List the etcd cluster overview (leader, raft index, DB size, health) and a
+per-member table (ID, name, status, health, role, peer/client URLs).
+
+Use --json for stable machine-readable output suitable for scripting.`,
+	Example: `  runos etcd list
+  runos etcd list --json`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
 		clusterInfo, err := k8s.GetEtcdClusterInfo()
 		if err != nil {
-			cmd.Println("Error getting etcd cluster info:", err)
-			return
+			return roslog.Fail("List etcd members", err.Error(),
+				"confirm this is a control-plane node and etcd is running (kubectl -n kube-system get pods), then retry")
+		}
+
+		if listJSON {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if err := enc.Encode(clusterInfo); err != nil {
+				return roslog.Fail("List etcd members", err.Error(),
+					"this is an internal encoding error; re-run without --json and report it")
+			}
+			return nil
 		}
 
 		if len(clusterInfo.Members) == 0 {
-			cmd.Println("No etcd members found")
-			return
+			roslog.Println("No etcd members found")
+			return nil
 		}
 
-		// Print cluster overview
-		cmd.Println("=== Etcd Cluster Information ===")
-		cmd.Printf("Cluster ID: %s\n", clusterInfo.ClusterID)
-		cmd.Printf("Leader: %s (%s)\n", clusterInfo.LeaderName, clusterInfo.LeaderID)
-		cmd.Printf("Revision: %s\n", clusterInfo.Revision)
-		cmd.Printf("Database Size: %.2f MB\n", float64(clusterInfo.DbSizeBytes)/1024/1024)
-		cmd.Printf("Overall Health: %v\n", clusterInfo.IsHealthy)
-		cmd.Printf("Total Members: %d\n\n", len(clusterInfo.Members))
-
-		// Print member details
-		cmd.Println("=== Member Details ===")
-		for i, member := range clusterInfo.Members {
-			cmd.Printf("Member %d:\n", i+1)
-			cmd.Printf("  ID: %s\n", member.ID)
-			cmd.Printf("  Name: %s\n", member.Name)
-			cmd.Printf("  Status: %s\n", func() string {
-				if member.Started {
-					return "started"
-				}
-				return "not started"
-			}())
-			cmd.Printf("  Health: %s\n", member.Health)
-			cmd.Printf("  Role: %s\n", func() string {
-				if member.IsLeader {
-					return "Leader"
-				} else if member.IsLearner {
-					return "Learner"
-				}
-				return "Follower"
-			}())
-			cmd.Printf("  Peer URLs: %s\n", member.PeerURLs)
-			cmd.Printf("  Client URLs: %s\n", member.ClientURLs)
-			if i < len(clusterInfo.Members)-1 {
-				cmd.Println()
-			}
-		}
+		printClusterInfo(clusterInfo)
+		return nil
 	},
+}
+
+// healthLabel renders a bool cluster-health flag as a human word instead of a
+// raw Go bool.
+func healthLabel(healthy bool) string {
+	if healthy {
+		return "healthy"
+	}
+	return "unhealthy"
+}
+
+// memberRole derives the role label for a member.
+func memberRole(m k8s.EtcdMemberV2) string {
+	switch {
+	case m.IsLeader:
+		return "Leader"
+	case m.IsLearner:
+		return "Learner"
+	default:
+		return "Follower"
+	}
+}
+
+// memberStatus renders the started flag as a word.
+func memberStatus(started bool) string {
+	if started {
+		return "started"
+	}
+	return "not started"
+}
+
+// printClusterInfo writes the human-readable cluster overview and member table
+// to stdout.
+func printClusterInfo(clusterInfo *k8s.EtcdClusterInfo) {
+	roslog.Println("=== Etcd Cluster Information ===")
+	roslog.Printf("Cluster ID:      %s\n", clusterInfo.ClusterID)
+	roslog.Printf("Leader:          %s (%s)\n", clusterInfo.LeaderName, clusterInfo.LeaderID)
+	// parts[8] of `etcdctl endpoint status` is the raft index, not the etcd
+	// revision; label it accordingly.
+	roslog.Printf("Raft Index:      %s\n", clusterInfo.RaftIndex)
+	roslog.Printf("Database Size:   %.2f MB\n", float64(clusterInfo.DbSizeBytes)/1024/1024)
+	roslog.Printf("Overall Health:  %s\n", healthLabel(clusterInfo.IsHealthy))
+	roslog.Printf("Total Members:   %d\n\n", len(clusterInfo.Members))
+
+	roslog.Println("=== Member Details ===")
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tNAME\tSTATUS\tHEALTH\tROLE\tPEER URLS\tCLIENT URLS")
+	for _, member := range clusterInfo.Members {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			member.ID,
+			member.Name,
+			memberStatus(member.Started),
+			member.Health,
+			memberRole(member),
+			member.PeerURLs,
+			member.ClientURLs,
+		)
+	}
+	w.Flush()
+}
+
+func init() {
+	listMembers.Flags().BoolVar(&listJSON, "json", false, "Output cluster info as JSON")
 }

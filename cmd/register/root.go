@@ -15,13 +15,28 @@ var (
 	aid    string
 	server string
 	token  string
-	cp     string
 )
 
 var RootCmd = &cobra.Command{
 	Use:   "register",
-	Short: "Register this node",
-	Long:  `Register this node`,
+	Short: "Register this node with Nodeward and obtain mTLS certificates",
+	Long: `Register this node with the Nodeward control plane.
+
+Over the L1Sec (TLS) channel this command authenticates with a short-lived
+registration token, receives the node's mTLS client certificate, private key,
+and the CA certificate, writes them under /etc/runos, and persists the resolved
+account ID (aid) and node ID (nid) into /etc/runos/config.yaml.
+
+Run as root (it writes to /etc/runos). The control-plane vs worker role is not
+chosen here; it is determined later, during install/cluster join, from the
+Kubernetes node labels.
+
+Do not assemble the flags by hand: copy the full 'runos register ...' command
+verbatim from the RunOS console, which embeds a fresh token and the correct
+account ID and server.`,
+	Example: `  # Copy this verbatim from the RunOS console (token is short-lived):
+  sudo runos register --server nodeward.runos.com --aid <ACCOUNT_ID> --token <TOKEN>`,
+	Args: cobra.NoArgs,
 	// RunE so a failed registration exits non-zero (the installer checks it).
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Validate required flags BEFORE any work, so an empty --server can't
@@ -37,7 +52,7 @@ var RootCmd = &cobra.Command{
 				"generate a machine-id with 'sudo systemd-machine-id-setup' (or 'sudo dbus-uuidgen --ensure'), then re-run")
 		}
 
-		if err := registernode.RegisterNode(token, aid, machineId, cp, server); err != nil {
+		if err := registernode.RegisterNode(token, aid, machineId, server); err != nil {
 			return roslog.Fail("Register node", err.Error(),
 				"re-copy the registration command from the RunOS console (tokens are short-lived) and re-run")
 		}
@@ -67,9 +82,6 @@ func init() {
 		"Installer Server")
 	RootCmd.PersistentFlags().StringVarP(&token, "token", "t", "",
 		"Secret, short-lived token, provided to you when requesting the registration command.")
-	RootCmd.PersistentFlags().StringVarP(&cp, "control-plane", "c", "0",
-		"Whether this node will be a control plane node 1 or 0. Default is 0 if you already "+
-			"have at least 3 cp nodes in your cluster.")
 }
 
 // getMachineId returns the Linux machine id, a unique identifier generated at

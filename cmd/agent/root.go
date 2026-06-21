@@ -2,10 +2,16 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/runos-official/nodeagent/agentstream"
 	"github.com/runos-official/nodeagent/config"
@@ -21,25 +27,151 @@ import (
 	"github.com/runos-official/nodeagent/backend"
 )
 
+// agentLockPath is the advisory lock taken for the lifetime of the agent so two
+// `runos agent` instances cannot race the same :6446 proxy and wg0 interface.
+const agentLockPath = "/run/runos/agent.lock"
+
 // RootCmd represents the agent command
 var RootCmd = &cobra.Command{
 	Use:   "agent",
-	Short: "Start the agent",
-	Long:  `Sync this node with Nodeward control plane`,
-	Run: func(cmd *cobra.Command, args []string) {
-		// Check certificate expiry and auto-renew if needed
+	Short: "Start the RunOS node agent daemon",
+	Long: `Start the RunOS node agent daemon.
+
+Opens the persistent mTLS instruction stream to the Nodeward control plane and
+runs the per-connection services (HAProxy Kubernetes API proxy on :6446 and the
+heartbeat), supervising and reconnecting on transient failures. The node must
+already be registered (run 'runos register ...' from the console first); the
+agent verifies its mTLS certificate before starting.`,
+	Example: "  runos agent",
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Precondition: this node must be registered, i.e. the mTLS cert/key/CA
+		// must exist, be non-empty and parseable. Starting without them would
+		// fail every Nodeward dial with an opaque mTLS error and spin forever in
+		// the supervised reconnect loop, so fail fast with an actionable remedy.
+		if err := checkRegistered(); err != nil {
+			return err
+		}
+
+		// Take an advisory, exclusive flock so a second `runos agent` cannot race
+		// this one over :6446 / wg0. Held for the process lifetime; the fd is
+		// intentionally leaked (released by the kernel on exit). A non-permission
+		// failure to acquire the lock means another agent already holds it.
+		lockFile, err := acquireAgentLock()
+		if err != nil {
+			return err
+		}
+		if lockFile != nil {
+			defer lockFile.Close()
+		}
+
+		// Check certificate expiry and auto-renew if needed. If the certificate
+		// has ALREADY expired and renewal failed, do not continue into a
+		// guaranteed mTLS handshake failure: fail fast with a remedy.
 		renewed, err := certificate.CheckAndAutoRenew()
 		if err != nil {
+			if expired, expiry := certificateExpired(); expired {
+				return roslog.Fail(
+					"Start agent",
+					fmt.Sprintf("mTLS certificate expired on %s and automatic renewal failed: %v", expiry.Format(time.RFC3339), err),
+					"check connectivity to the Nodeward control plane, then run `runos certificate renew`; if it keeps failing, re-register this node from the console",
+				)
+			}
 			roslog.E("Certificate auto-renewal check failed", err)
 		} else if renewed {
 			roslog.I("Certificate was automatically renewed")
 		}
 
 		if err := syncUc.ForceVpnSync(); err != nil {
-			roslog.E("Error syncing VPN before agent start, things may not work as expected", err)
+			roslog.W("VPN sync before agent start failed; peers may be stale until the next sync (run `runos sync vpn` to retry). Continuing.", err)
 		}
 		runAgent()
+		return nil
 	},
+}
+
+// checkRegistered verifies this node is registered: the mTLS client certificate,
+// private key and CA all exist, are non-empty, and the cert/key load as a valid
+// keypair. On any failure it returns an already-reported roslog.Fail with the
+// remedy to register. config.Get*Path create an empty file if missing, so an
+// "empty" file is the unregistered case.
+func checkRegistered() error {
+	certPath := config.GetPublicKeyPath()
+	keyPath := config.GetPrivateKeyPath()
+	caPath := config.GetCACertPath()
+
+	for _, p := range []struct{ kind, path string }{
+		{"mTLS certificate", certPath},
+		{"mTLS private key", keyPath},
+		{"CA certificate", caPath},
+	} {
+		info, err := os.Stat(p.path)
+		if err != nil || info.Size() == 0 {
+			return roslog.Fail(
+				"Start agent",
+				fmt.Sprintf("this node is not registered (%s missing or empty at %s)", p.kind, p.path),
+				"run `runos register --token <TOKEN> --aid <ACCOUNT_ID>` from the console, then start the agent",
+			)
+		}
+	}
+
+	// Both cert and key are present and non-empty: confirm they parse as a valid
+	// mTLS keypair so we catch a truncated / corrupt registration before dialing.
+	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+		return roslog.Fail(
+			"Start agent",
+			fmt.Sprintf("this node's mTLS certificate/key is unreadable or corrupt (%v)", err),
+			"re-register this node: run `runos register --token <TOKEN> --aid <ACCOUNT_ID>` from the console, then start the agent",
+		)
+	}
+
+	return nil
+}
+
+// certificateExpired reports whether the on-disk mTLS certificate's NotAfter is
+// in the past, returning the expiry time. On a read/parse error it returns
+// (false, zero) so callers fall back to the non-fatal path.
+func certificateExpired() (bool, time.Time) {
+	expiry, err := certificate.GetCertificateExpiration()
+	if err != nil {
+		return false, time.Time{}
+	}
+	return time.Now().After(expiry), expiry
+}
+
+// acquireAgentLock takes an exclusive, non-blocking advisory lock at
+// agentLockPath. It returns the open lock file (whose fd holds the lock for the
+// process lifetime) on success. If another agent already holds the lock it
+// returns an already-reported roslog.Fail. Inability to create/open the lock
+// file (e.g. /run not writable in an unusual environment) is treated as a soft
+// failure: it logs a warning and returns (nil, nil) so the agent still starts.
+func acquireAgentLock() (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(agentLockPath), 0755); err != nil {
+		roslog.W("Could not create agent lock directory; skipping single-instance lock", err, "path", agentLockPath)
+		return nil, nil
+	}
+
+	f, err := os.OpenFile(agentLockPath, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		roslog.W("Could not open agent lock file; skipping single-instance lock", err, "path", agentLockPath)
+		return nil, nil
+	}
+
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, roslog.Fail(
+				"Start agent",
+				fmt.Sprintf("another `runos agent` instance is already running (lock held at %s)", agentLockPath),
+				"stop the running agent first (`systemctl stop runos-agent` or kill the existing process), then retry",
+			)
+		}
+		// Unexpected lock error: warn but do not block startup.
+		roslog.W("Could not acquire agent lock; skipping single-instance lock", err, "path", agentLockPath)
+		return nil, nil
+	}
+
+	return f, nil
 }
 
 // Initialize package configuration

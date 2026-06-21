@@ -11,25 +11,25 @@ import (
 
 // EtcdMemberV2 represents an etcd cluster member with extended information
 type EtcdMemberV2 struct {
-	ID         string
-	Name       string
-	PeerURLs   string
-	ClientURLs string
-	Started    bool
-	IsLearner  bool
-	IsLeader   bool
-	Health     string
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	PeerURLs   string `json:"peerUrls"`
+	ClientURLs string `json:"clientUrls"`
+	Started    bool   `json:"started"`
+	IsLearner  bool   `json:"isLearner"`
+	IsLeader   bool   `json:"isLeader"`
+	Health     string `json:"health"`
 }
 
 // EtcdClusterInfo represents overall cluster information
 type EtcdClusterInfo struct {
-	Members     []EtcdMemberV2
-	LeaderID    string
-	LeaderName  string
-	ClusterID   string
-	Revision    string
-	DbSizeBytes int64
-	IsHealthy   bool
+	Members     []EtcdMemberV2 `json:"members"`
+	LeaderID    string         `json:"leaderId"`
+	LeaderName  string         `json:"leaderName"`
+	ClusterID   string         `json:"clusterId"`
+	RaftIndex   string         `json:"raftIndex"`
+	DbSizeBytes int64          `json:"dbSizeBytes"`
+	IsHealthy   bool           `json:"isHealthy"`
 }
 
 // RemoveEtcdMemberDirect safely removes an etcd member using direct etcdctl commands
@@ -131,7 +131,7 @@ func GetEtcdClusterInfo() (*EtcdClusterInfo, error) {
 	}
 
 	// Get cluster status
-	clusterID, revision, dbSize, err := getEtcdStatus()
+	clusterID, raftIndex, dbSize, err := getEtcdStatus()
 	if err != nil {
 		roslog.W("Failed to get etcd status", err)
 	}
@@ -155,7 +155,7 @@ func GetEtcdClusterInfo() (*EtcdClusterInfo, error) {
 		LeaderID:    leaderID,
 		LeaderName:  leaderName,
 		ClusterID:   clusterID,
-		Revision:    revision,
+		RaftIndex:   raftIndex,
 		DbSizeBytes: dbSize,
 		IsHealthy:   healthy,
 	}, nil
@@ -307,49 +307,64 @@ func getEtcdLeader() (string, error) {
 	return "", fmt.Errorf("leader not found in status output")
 }
 
-func getEtcdStatus() (clusterID, revision string, dbSize int64, err error) {
+// getEtcdStatus returns the real cluster ID, the local endpoint's raft index,
+// and the DB size in bytes. It uses `-w fields` (not `-w table`) because the
+// table form does not expose the cluster ID at all, and its "ID" column is the
+// endpoint's member ID, not the cluster ID. The fields form yields each value
+// on its own `"Key" : value` line, so the values are read by name rather than
+// by fragile positional parsing of a rendered table.
+func getEtcdStatus() (clusterID, raftIndex string, dbSize int64, err error) {
 	cmd := exec.Command("etcdctl",
 		"--endpoints=https://127.0.0.1:2379",
 		"--cacert=/etc/kubernetes/pki/etcd/ca.crt",
 		"--cert=/etc/kubernetes/pki/etcd/peer.crt",
 		"--key=/etc/kubernetes/pki/etcd/peer.key",
-		"endpoint", "status", "-w", "table")
+		"endpoint", "status", "-w", "fields")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to get etcd status: %v", err)
 	}
 
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "https://") && !strings.Contains(line, "ENDPOINT") {
-			parts := strings.Split(line, "|")
-			if len(parts) >= 9 {
-				// Format: | ENDPOINT | ID | VERSION | DB SIZE | IS LEADER | IS LEARNER | RAFT TERM | RAFT INDEX | RAFT APPLIED INDEX | ERRORS |
-				clusterID = strings.TrimSpace(parts[2]) // ID field
-				revision = strings.TrimSpace(parts[8])  // RAFT INDEX
-
-				// Parse DB size (format like "6.2 MB")
-				dbSizeStr := strings.TrimSpace(parts[4])
-				if strings.Contains(dbSizeStr, "MB") {
-					sizeStr := strings.Fields(dbSizeStr)[0]
-					if size, parseErr := strconv.ParseFloat(sizeStr, 64); parseErr == nil {
-						dbSize = int64(size * 1024 * 1024) // Convert MB to bytes
-					}
-				} else if strings.Contains(dbSizeStr, "kB") {
-					sizeStr := strings.Fields(dbSizeStr)[0]
-					if size, parseErr := strconv.ParseFloat(sizeStr, 64); parseErr == nil {
-						dbSize = int64(size * 1024) // Convert kB to bytes
-					}
-				}
-
-				return clusterID, revision, dbSize, nil
-			}
+	fields := parseEtcdStatusFields(string(output))
+	clusterID = fields["ClusterID"]
+	raftIndex = fields["RaftIndex"]
+	if raftIndex == "" {
+		// Older etcdctl emits "Revision" for the same value.
+		raftIndex = fields["Revision"]
+	}
+	if sizeStr := fields["DbSize"]; sizeStr != "" {
+		if size, parseErr := strconv.ParseInt(sizeStr, 10, 64); parseErr == nil {
+			dbSize = size // DbSize is already in bytes
 		}
 	}
 
-	return "", "", 0, fmt.Errorf("status not found in output")
+	if clusterID == "" && raftIndex == "" && dbSize == 0 {
+		return "", "", 0, fmt.Errorf("status not found in output")
+	}
+
+	return clusterID, raftIndex, dbSize, nil
+}
+
+// parseEtcdStatusFields parses `etcdctl endpoint status -w fields` output, whose
+// lines look like `"ClusterID" : 17237436991929494000`. Only the first endpoint
+// block is needed (we query a single local endpoint), and later duplicate keys
+// simply overwrite earlier ones.
+func parseEtcdStatusFields(output string) map[string]string {
+	fields := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		key := strings.Trim(strings.TrimSpace(line[:idx]), `"`)
+		val := strings.Trim(strings.TrimSpace(line[idx+1:]), `"`)
+		if key != "" {
+			fields[key] = val
+		}
+	}
+	return fields
 }
 
 // getMemberHealth checks individual member health

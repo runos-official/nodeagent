@@ -9,17 +9,26 @@ import (
 
 var k8sCmd = &cobra.Command{
 	Use:   "k8s",
-	Short: "Install Kubernetes, assumes VPN is already installed",
+	Short: "Install Kubernetes only (assumes VPN is already up)",
+	Long: `Install Kubernetes on this node, assuming the WireGuard VPN is already up.
+
+Syncs VPN peers from Nodeward (to confirm cluster connectivity) and then
+installs Kubernetes and joins the cluster. Use this to re-run only the
+Kubernetes phase after 'runos install wireguard'. Requires root and a prior
+successful 'runos register'.`,
+	Example: `  # VPN already up; install Kubernetes only:
+  sudo runos install k8s`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Sync peer so that we can join a cluster
-		roslog.Println("Syncing VPN")
+		banner("Syncing VPN")
 		if err := sync.ForceVpnSync(); err != nil {
 			return roslog.Fail("Sync VPN peers", err.Error(),
 				"verify WireGuard came up ('wg show') and Nodeward is reachable, then re-run")
 		}
 
 		// Install K8s, assuming we now have vpn connectivity to the target peer node to join the cluster.
-		roslog.Println("Installing K8s")
+		banner("Installing Kubernetes")
 		if err := install.K8s(); err != nil {
 			return roslog.Fail("Install Kubernetes", err.Error(),
 				"see /var/log/runos.log and 'journalctl -u runos'; run 'sudo runos preflight' to diagnose, then re-run")

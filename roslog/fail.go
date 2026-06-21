@@ -1,10 +1,35 @@
 package roslog
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 )
+
+// alreadyReported marks an error whose operator-facing block has already been
+// printed (by Fail). main.go uses IsAlreadyReported to avoid double-printing a
+// second generic "There was an error..." line on top of the canonical block.
+type alreadyReported struct{ err error }
+
+func (a *alreadyReported) Error() string { return a.err.Error() }
+func (a *alreadyReported) Unwrap() error { return a.err }
+
+// AlreadyReported wraps err so callers know its failure block was already shown
+// to the operator. Returns nil when err is nil.
+func AlreadyReported(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &alreadyReported{err: err}
+}
+
+// IsAlreadyReported reports whether err (or anything it wraps) was produced by
+// Fail / AlreadyReported and thus already printed its own block.
+func IsAlreadyReported(err error) bool {
+	var a *alreadyReported
+	return errors.As(err, &a)
+}
 
 // stderr is the sink for operator-facing failure output. It is a package var so
 // tests can capture it; operator errors go to stderr (not stdout) so that a
@@ -49,5 +74,7 @@ func Fail(step, cause, remedy string) error {
 	fmt.Fprintf(stderr, "  %s\n", SupportLine)
 	redrawProgress()
 
-	return fmt.Errorf("%s: %s", step, cause)
+	// Mark as already-reported so main.go does not print a second generic line
+	// on top of this canonical block.
+	return AlreadyReported(fmt.Errorf("%s: %s", step, cause))
 }

@@ -3,6 +3,7 @@ package registernode
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/runos-official/nodeagent/backend"
@@ -18,7 +19,7 @@ import (
 // mTLS certificates and CA, and persisting the resolved account and node IDs.
 // It returns an error (never log.Fatalf) so the caller can exit non-zero with an
 // actionable message; gRPC failures are mapped to operator remedies.
-func RegisterNode(token, aid, machineId, cp, server string) error {
+func RegisterNode(token, aid, machineId, server string) error {
 	config.SetNodewardHost(server)
 
 	c, _, backendCancel, conn := backend.NodewardL1Sec()
@@ -38,17 +39,19 @@ func RegisterNode(token, aid, machineId, cp, server string) error {
 		return classifyRegisterError(err, aid, server)
 	}
 
-	fmt.Println("Writing CA certificate to file...")
+	// Progress lines are diagnostics, not program output: send them to stderr so
+	// stdout stays clean for anything a caller might pipe/capture.
+	fmt.Fprintln(os.Stderr, "Writing CA certificate to file...")
 	if err := StorePublicKey(r.CaCert, config.GetCACertPath()); err != nil {
 		return fmt.Errorf("could not store CA certificate (is /etc/runos writable? run as root): %w", err)
 	}
 
-	fmt.Println("Writing public certificate to file...")
+	fmt.Fprintln(os.Stderr, "Writing public certificate to file...")
 	if err := StorePublicKey(r.PublicKey, config.GetPublicKeyPath()); err != nil {
 		return fmt.Errorf("could not store public certificate (is /etc/runos writable? run as root): %w", err)
 	}
 
-	fmt.Println("Writing private certificate to file...")
+	fmt.Fprintln(os.Stderr, "Writing private certificate to file...")
 	if err := StorePrivateKey(r.PrivateKey, config.GetPrivateKeyPath()); err != nil {
 		return fmt.Errorf("could not store private certificate (is /etc/runos writable? run as root): %w", err)
 	}

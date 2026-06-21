@@ -17,6 +17,7 @@ import (
 	"github.com/runos-official/nodeagent/cmd/update"
 	"github.com/runos-official/nodeagent/cmd/version"
 	"github.com/runos-official/nodeagent/roslog"
+	versionpkg "github.com/runos-official/nodeagent/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -28,6 +29,14 @@ var (
 	rootCmd = &cobra.Command{
 		Use:   "runos",
 		Short: "The RunOS Node Agent CLI",
+		// A RunE failure reports itself (see roslog.Fail + main.go); cobra must
+		// not also dump usage or re-print the error. SilenceUsage/SilenceErrors
+		// make the roslog failure block the single failure output.
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		// Wire `runos --version` / `runos -v`. The `version` SUBcommand is a
+		// separate command and is unaffected by this.
+		Version: versionpkg.Version,
 	}
 )
 
@@ -38,6 +47,7 @@ func Execute() error {
 
 func init() {
 	cobra.OnInitialize(initConfig)
+	rootCmd.SetVersionTemplate("runos {{.Version}}\n")
 	rootCmd.AddCommand(version.RootCmd)
 	rootCmd.AddCommand(preflight.RootCmd)
 	rootCmd.AddCommand(register.RootCmd)

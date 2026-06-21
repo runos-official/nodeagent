@@ -220,22 +220,26 @@ func GetControlPlaneNodes() []string {
 	return result
 }
 
-// ForceKubeproxyUpdate forces an update of the HAProxy configuration
-// by fetching fresh control plane nodes directly from Nodeward via L2Sec
-// instead of using the agent stream
-func ForceKubeproxyUpdate() error {
+// ForceKubeproxyUpdate forces an update of the HAProxy configuration by
+// fetching fresh control plane nodes directly from Nodeward via L2Sec instead
+// of using the agent stream.
+//
+// It returns the number of control-plane backend endpoints that were applied.
+// A count of 0 with a nil error means Nodeward reported no control-plane nodes
+// (a no-op refresh): callers should NOT report this as a successful update.
+func ForceKubeproxyUpdate() (int, error) {
 	roslog.I("Forcing kube-proxy update...")
 
 	// Get control plane nodes directly from Nodeward using the backend package
 	cpNodeObjects, err := backend.GetControlPlaneNodes()
 	if err != nil {
 		roslog.E("Error fetching control plane nodes from Nodeward", err)
-		return err
+		return 0, err
 	}
 
 	if len(cpNodeObjects) == 0 {
 		roslog.I("No control plane nodes found from Nodeward")
-		return nil
+		return 0, nil
 	}
 
 	// Convert the node objects to string endpoints for HAProxy
@@ -246,11 +250,11 @@ func ForceKubeproxyUpdate() error {
 
 	// Force update the HAProxy config with the fresh nodes
 	SetControlPlaneNodes(endpoints)
-	roslog.I("HAProxy configuration forcefully updated with %d control plane nodes "+
-		"from Nodeward with values %v", len(endpoints), endpoints)
+	roslog.I("HAProxy configuration forcefully updated",
+		"node_count", len(endpoints), "endpoints", endpoints)
 
 	// Wait briefly to ensure HAProxy has time to reload
 	time.Sleep(1 * time.Second)
 
-	return nil
+	return len(endpoints), nil
 }

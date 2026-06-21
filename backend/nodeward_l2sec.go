@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"flag"
 	"fmt"
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/l2sec"
@@ -13,13 +12,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
 	"os"
-	"sync"
 	"time"
-)
-
-var (
-	addrL2Sec *string
-	onceL2Sec sync.Once
 )
 
 // l2secDialTimeout bounds a single dial attempt so it cannot hang forever
@@ -32,20 +25,18 @@ const l2secDialTimeout = 20 * time.Second
 //
 // The dial is bounded by l2secDialTimeout: it returns an error instead of
 // blocking forever, so a supervised caller can back off and re-dial rather than
-// wedging the process. It panics only on local/unrecoverable setup errors
-// (missing or unparsable client cert / CA), never on a transient connect failure.
+// wedging the process. Local/unrecoverable setup errors (missing or unparsable
+// client cert / CA, common on an unregistered or half-installed node) are
+// returned as errors too, never panicked, so callers surface a clean message
+// instead of a raw Go stack trace.
 func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc, *grpc.ClientConn, error) {
-	onceL2Sec.Do(func() {
-		connectionString := fmt.Sprintf("%s:%d", config.GetNodewardHost(), 9192)
-		roslog.I("Connecting to nodeward L2", "connection_string", connectionString)
-		addrL2Sec = flag.String("addr_nodeward_l2sec", connectionString, "the address to connect to")
-		flag.Parse()
-	})
+	addrL2Sec := fmt.Sprintf("%s:%d", config.GetNodewardHost(), 9192)
+	roslog.I("Connecting to nodeward L2", "connection_string", addrL2Sec)
 
 	cert, err := tls.LoadX509KeyPair(config.GetPublicKeyPath(), config.GetPrivateKeyPath())
 	if err != nil {
 		roslog.E("failed to load client cert", err)
-		panic(err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to load client certificate: %w", err)
 	}
 
 	ca := x509.NewCertPool()
@@ -53,11 +44,11 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	caBytes, err := os.ReadFile(caFilePath)
 	if err != nil {
 		roslog.E("failed to read ca cert", err, "ca_file_path", caFilePath)
-		panic(err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to read CA certificate %s: %w", caFilePath, err)
 	}
 	if ok := ca.AppendCertsFromPEM(caBytes); !ok {
 		roslog.E("failed to parse ca cert", nil, "ca_file_path", caFilePath)
-		panic("failed to parse ca file")
+		return nil, nil, nil, nil, fmt.Errorf("failed to parse CA certificate %s", caFilePath)
 	}
 
 	tlsConfig := &tls.Config{
@@ -73,7 +64,7 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	// forever; the agent's reconnect loop owns retry/backoff at a higher level.
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), l2secDialTimeout)
 	defer dialCancel()
-	conn, err := grpc.DialContext(dialCtx, *addrL2Sec,
+	conn, err := grpc.DialContext(dialCtx, addrL2Sec,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 		grpc.WithDefaultServiceConfig(`{
             "serviceConfig": {
@@ -102,7 +93,7 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 		}),
 		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 			attemptCount++
-			roslog.I("Attempting connection", "attempt", attemptCount, "address", *addrL2Sec)
+			roslog.I("Attempting connection", "attempt", attemptCount, "address", addrL2Sec)
 			err := invoker(ctx, method, req, reply, cc, opts...)
 			if err != nil {
 				roslog.W("Connection attempt failed", err, "attempt", attemptCount)
