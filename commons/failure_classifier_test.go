@@ -142,6 +142,51 @@ func TestClassifyCommandFailureEmptyOutput(t *testing.T) {
 	}
 }
 
+// Pins matcher ORDERING: the package-not-found bucket owns "was not found", and
+// it is listed BEFORE the broad kubeadm bucket. A real apt line like
+// "Version '...' was not found" must classify as NA_PKG_NOTFOUND, not get
+// misrouted into NA_KUBEADM (whose 'unhealthy'/deadline signatures are fuzzy
+// English that could otherwise swallow it). Reordering the switch would break the
+// console's per-cause remedy, so pin both directions.
+func TestClassifyCommandFailureOrdering(t *testing.T) {
+	cases := []struct {
+		name     string
+		output   string
+		wantCode string
+	}{
+		{
+			// The exact apt phrasing that shares "was not found" with no kubeadm context.
+			name:     "apt version not found is pkg-not-found, not kubeadm",
+			output:   "E: Version '1.28.0-1.1' for 'kubeadm' was not found",
+			wantCode: "NA_PKG_NOTFOUND",
+		},
+		{
+			// A genuine kubeadm health failure must still land in the kubeadm bucket.
+			name:     "etcd unhealthy is kubeadm",
+			output:   "[wait-control-plane] etcd member is unhealthy",
+			wantCode: "NA_KUBEADM",
+		},
+		{
+			// "context deadline exceeded" with no package phrasing is kubeadm, not net.
+			name:     "kubeadm context deadline is kubeadm",
+			output:   "error execution phase wait-control-plane: context deadline exceeded",
+			wantCode: "NA_KUBEADM",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, cause, remedy := classifyCommandFailure("kubeadm step", "kubeadm init", tc.output)
+			if code != tc.wantCode {
+				t.Errorf("code = %q, want %q", code, tc.wantCode)
+			}
+			// The contract that every branch (not just the fallback) is non-empty.
+			if cause == "" || remedy == "" {
+				t.Errorf("cause/remedy must never be empty: cause=%q remedy=%q", cause, remedy)
+			}
+		})
+	}
+}
+
 func TestGenericCauseEmptyStep(t *testing.T) {
 	if got := genericCause(""); got == "" {
 		t.Error("genericCause(\"\") must not be empty")

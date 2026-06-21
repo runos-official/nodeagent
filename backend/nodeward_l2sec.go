@@ -20,6 +20,42 @@ import (
 // loop in the agent retries dialing on its own backoff schedule.
 const l2secDialTimeout = 20 * time.Second
 
+// loadL2SecClientTLS loads and validates the mTLS material for the L2Sec channel:
+// the client keypair (certPath/keyPath) and the CA root (caPath, which must be a
+// valid PEM bundle). It returns a configured *tls.Config or an error. It NEVER
+// panics — a missing, empty, or non-PEM cert/CA (common on an unregistered or
+// half-installed node) yields a clean error so the supervised caller can surface
+// a message and back off instead of crashing the process with a stack trace.
+//
+// serverName pins the expected server hostname for verification. Extracted as a
+// pure helper (no dialing, no globals) so this load+validate path is unit-testable
+// against on-disk fixtures.
+func loadL2SecClientTLS(certPath, keyPath, caPath, serverName string) (*tls.Config, error) {
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		roslog.E("failed to load client cert", err)
+		return nil, fmt.Errorf("failed to load client certificate: %w", err)
+	}
+
+	ca := x509.NewCertPool()
+	caBytes, err := os.ReadFile(caPath)
+	if err != nil {
+		roslog.E("failed to read ca cert", err, "ca_file_path", caPath)
+		return nil, fmt.Errorf("failed to read CA certificate %s: %w", caPath, err)
+	}
+	if ok := ca.AppendCertsFromPEM(caBytes); !ok {
+		roslog.E("failed to parse ca cert", nil, "ca_file_path", caPath)
+		return nil, fmt.Errorf("failed to parse CA certificate %s", caPath)
+	}
+
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		ServerName:   serverName,
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      ca,
+	}, nil
+}
+
 // NodewardL2Sec dials the L2Sec (mTLS) operational channel and returns the
 // client plus the context, cancel func and connection the caller must clean up.
 //
@@ -33,29 +69,11 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	addrL2Sec := fmt.Sprintf("%s:%d", config.GetNodewardHost(), 9192)
 	roslog.I("Connecting to nodeward L2", "connection_string", addrL2Sec)
 
-	cert, err := tls.LoadX509KeyPair(config.GetPublicKeyPath(), config.GetPrivateKeyPath())
+	tlsConfig, err := loadL2SecClientTLS(
+		config.GetPublicKeyPath(), config.GetPrivateKeyPath(),
+		config.GetCACertPath(), config.GetNodewardHost())
 	if err != nil {
-		roslog.E("failed to load client cert", err)
-		return nil, nil, nil, nil, fmt.Errorf("failed to load client certificate: %w", err)
-	}
-
-	ca := x509.NewCertPool()
-	caFilePath := config.GetCACertPath()
-	caBytes, err := os.ReadFile(caFilePath)
-	if err != nil {
-		roslog.E("failed to read ca cert", err, "ca_file_path", caFilePath)
-		return nil, nil, nil, nil, fmt.Errorf("failed to read CA certificate %s: %w", caFilePath, err)
-	}
-	if ok := ca.AppendCertsFromPEM(caBytes); !ok {
-		roslog.E("failed to parse ca cert", nil, "ca_file_path", caFilePath)
-		return nil, nil, nil, nil, fmt.Errorf("failed to parse CA certificate %s", caFilePath)
-	}
-
-	tlsConfig := &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		ServerName:   config.GetNodewardHost(),
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      ca,
+		return nil, nil, nil, nil, err
 	}
 
 	attemptCount := 0

@@ -82,6 +82,40 @@ func TestExpectedChecksum(t *testing.T) {
 	}
 }
 
+// Pins the fail-closed version gate: the updater installs only an EXACT,
+// attested semver tag. Floating/garbage values ("latest", "banana") and partial
+// versions ("1.2") must be rejected before any release URL is built — accepting
+// them would let `runos update` fetch an unattested or non-existent binary.
+func TestSemverRe(t *testing.T) {
+	valid := []string{
+		"v0.24.0", "0.24.0", "v1.2.3", "1.2.3-rc.1", "v2.0.0-beta.2", "10.20.30",
+	}
+	for _, v := range valid {
+		if !semverRe.MatchString(v) {
+			t.Errorf("semverRe rejected valid exact tag %q", v)
+		}
+	}
+
+	invalid := []string{
+		"latest",  // floating alias, the prior root-RCE-ish fallback
+		"banana",  // garbage
+		"1.2",     // partial (missing patch)
+		"1",       // partial
+		"v1.2",    // partial with v
+		"",        // empty
+		"v",       // just the prefix
+		"1.2.3.4", // too many segments
+		"main",    // branch name
+		"vlatest", // v-prefixed alias
+		" 1.2.3",  // leading space (anchored regex must reject; caller trims, but pin anchoring)
+	}
+	for _, v := range invalid {
+		if semverRe.MatchString(v) {
+			t.Errorf("semverRe accepted invalid version %q (must be exact semver only)", v)
+		}
+	}
+}
+
 func TestGoarchToReleaseArch(t *testing.T) {
 	cases := map[string]string{
 		"amd64": "amd64",

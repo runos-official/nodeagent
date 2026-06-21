@@ -47,9 +47,15 @@ func runPreflightChecks() error {
 		fmt.Println("RUNOS_DEV_SKIP_PREFLIGHT=1 is set, skipping preflight checks")
 		return nil
 	}
+	return runChecks(preflightChecks())
+}
 
-	checks := preflightChecks()
-
+// runChecks is the phase runner, split out from runPreflightChecks so it can be
+// exercised with injected (mock) checks. It is behavior-identical to the inline
+// loop it replaced: fatal prerequisites fail-fast in declared order; then local
+// (non-net) checks, then network checks, each phase running EVERY check and
+// collecting findings rather than stopping at the first.
+func runChecks(checks []check) error {
 	// 1. Fatal prerequisites, fail-fast and in declared order.
 	for _, c := range checks {
 		if !c.fatal {
