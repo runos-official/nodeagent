@@ -38,8 +38,10 @@ func NodewardL1Sec() (l1sec.NodewardClient, context.Context, context.CancelFunc,
 	caPath := config.GetPublicCACertPath()
 	caBytes, err := os.ReadFile(caPath)
 	if err != nil {
-		roslog.E("failed to read l1sec ca cert", err, "ca_file_path", caPath)
-		panic(err)
+		roslog.Fail("Load the Nodeward registration CA certificate",
+			fmt.Sprintf("could not read %s: %v", caPath, err),
+			"This node was not bootstrapped by the installer (which downloads the CA). Run the full install command from the RunOS console; do not run 'register' on its own.")
+		os.Exit(1)
 	}
 
 	// Pin the L1Sec public CA: it was downloaded over a CDN with no integrity
@@ -48,8 +50,10 @@ func NodewardL1Sec() (l1sec.NodewardClient, context.Context, context.CancelFunc,
 	// the CA fetch could otherwise impersonate nodeward -> root RCE). If no pin
 	// is configured we proceed but warn loudly.
 	if pinned, perr := verifyL1SecCAPin(caBytes); perr != nil {
-		roslog.E("l1sec CA pin verification failed; refusing to register", perr, "ca_file_path", caPath)
-		panic(perr)
+		roslog.Fail("Verify the Nodeward registration CA (pin check)",
+			fmt.Sprintf("CA at %s failed pin verification: %v", caPath, perr),
+			"The downloaded CA does not match the expected fingerprint — a network MITM of the CA download is possible. Do not proceed; report this to your operator.")
+		os.Exit(1)
 	} else if !pinned {
 		roslog.W("l1sec CA is NOT pinned (no mtls.public-ca-sha256 / build pin set); the registration CA is trusted without integrity verification", nil, "ca_file_path", caPath)
 	} else {
@@ -58,8 +62,10 @@ func NodewardL1Sec() (l1sec.NodewardClient, context.Context, context.CancelFunc,
 
 	caPool := x509.NewCertPool()
 	if ok := caPool.AppendCertsFromPEM(caBytes); !ok {
-		roslog.E("failed to parse l1sec ca cert", nil, "ca_file_path", caPath)
-		panic("failed to parse l1sec ca file")
+		roslog.Fail("Parse the Nodeward registration CA certificate",
+			fmt.Sprintf("%s is not a valid PEM certificate", caPath),
+			"The CA file is corrupt or truncated (a proxy or error page saved as the cert?). Re-run the full install command to re-download it.")
+		os.Exit(1)
 	}
 	creds := credentials.NewTLS(&tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -71,8 +77,10 @@ func NodewardL1Sec() (l1sec.NodewardClient, context.Context, context.CancelFunc,
 	conn, err := grpc.Dial(*addrL1Sec, grpc.WithTransportCredentials(creds))
 
 	if err != nil {
-		roslog.E("did not connect", err)
-		panic(err)
+		roslog.Fail("Connect to Nodeward (L1Sec registration)",
+			fmt.Sprintf("could not dial %s: %v", *addrL1Sec, err),
+			"Check the node can reach the Nodeward host on TCP 9191 (egress firewall / DNS / proxy). Verify with: nc -vz "+config.GetNodewardHost()+" 9191")
+		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
