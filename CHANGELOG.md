@@ -7,6 +7,42 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.3.0
+
+Install-flow robustness, round 2: catch almost everything in preflight before
+anything is installed, and make every message plain-language and actionable so a
+failed install reads as an unmet prerequisite, not a broken product. Validated
+live on Ubuntu 24.04 (healthy node passes clean; induced failures each block with
+a clear message).
+
+### Added
+- **Preflight expanded to 44 checks** with a collect-all runner: it reports
+  EVERY blocking issue in one pass (instead of fail-fast, one-per-rerun), while
+  fatal prerequisites still stop early. New coverage for the realistic ways an
+  install fails before installing: HTTP-proxy vs direct-gRPC egress, high-port
+  (9191/9192) vs 443 egress, the full HTTPS endpoint set (Go net/http, not curl),
+  DNS answer sanity; systemd-as-init, /proc+/sys mounted, cgroup v2 + controllers,
+  REAL kernel-module load (not dry-run), writable sysctls, Linux capabilities,
+  container/WSL detection; /var space+inodes, mount exec/ro flags, swap
+  persistence in fstab, RAM pressure, entropy, etcd fsync, ulimits; existing-k8s
+  leftovers, already-registered, install lock, immutable target paths, cloud-init
+  completion, L1Sec CA validity, base tooling; hostname validity+persistence,
+  machine-id, resolv.conf/nsswitch, wireguard subnet overlap; apt usability,
+  firewall posture, rp_filter.
+- **Support line on every failure** (`roslog.SupportLine`): preflight, register
+  and install failures now end with how to reach support@runos.com if it looks
+  like a RunOS bug rather than an environment issue.
+
+### Fixed
+- **`register` no longer panics** on a missing/corrupt/unpinned L1Sec CA or a
+  dial failure — it prints a clear `FAILED:` block and exits non-zero.
+- **Customer-facing install-failure messages are plain language.** A failed
+  install command used to push a raw `Command failed:/Error:/Output:` blob to the
+  node's console page; it now shows a classified cause + `Try:` remedy (apt/dpkg
+  lock, no space, DNS/network, package-not-found, held packages, permission,
+  kubeadm preflight, containerd/CRI, GPG/repo), with the full raw detail kept in
+  /var/log/runos.log.
+
 ## v1.2.0
 
 Manual-install robustness: defensive preflight, honest failure reporting, clear
