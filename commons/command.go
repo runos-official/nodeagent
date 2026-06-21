@@ -164,14 +164,16 @@ func ProcessInstallCommandsStatusAware(commandList *l2sec.InstallCommandList) er
 			logMessage := fmt.Sprintf("Command failed: %s\nError: %v\nOutput: %s", redactedCmd, err, res)
 			roslog.E("Install command failed", err, "command", redactedCmd, "output", res)
 
-			// Classify the failure into a plain-language cause + remedy for the
-			// console node page (rendered verbatim in the Events table).
-			cause, remedy := classifyCommandFailure(redactedCmd, redactedCmd, res)
+			// Classify the failure into a stable code + plain-language cause +
+			// remedy for the console node page (rendered verbatim in the Events
+			// table). code/cause/remedy are also sent as structured nodelog
+			// fields; the SupportLine stays in the human-readable message.
+			code, cause, remedy := classifyCommandFailure(redactedCmd, redactedCmd, res)
 			userMessage := fmt.Sprintf("%s\n\nTry: %s\n\n%s", cause, remedy, roslog.SupportLine)
 
 			if cmd.IgnoreFailure {
 				roslog.InstallWarning(logMessage)
-				if err2 := backend.AddNodelog(2, "NodeInstallationWarning", userMessage); err2 != nil {
+				if err2 := backend.AddNodelogStructured(2, "NodeInstallationWarning", userMessage, code, cause, remedy, ""); err2 != nil {
 					roslog.InstallError(fmt.Sprintf("Failed to log warning to Nodeward: %v", err2))
 				}
 				continue
@@ -186,7 +188,7 @@ func ProcessInstallCommandsStatusAware(commandList *l2sec.InstallCommandList) er
 
 			roslog.InstallError(logMessage)
 
-			if err2 := backend.AddNodelog(1, "NodeInstallationFailure", userMessage); err2 != nil {
+			if err2 := backend.AddNodelogStructured(1, "NodeInstallationFailure", userMessage, code, cause, remedy, ""); err2 != nil {
 				roslog.InstallError(fmt.Sprintf("Failed to log to Nodeward: %v", err2))
 			}
 			return fmt.Errorf("%s", logMessage)

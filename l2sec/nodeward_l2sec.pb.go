@@ -1026,6 +1026,10 @@ type AddNodelogRequest struct {
 	Type          string                 `protobuf:"bytes,5,opt,name=type,proto3" json:"type,omitempty"`
 	Severity      int32                  `protobuf:"varint,10,opt,name=severity,proto3" json:"severity,omitempty"`
 	Message       string                 `protobuf:"bytes,15,opt,name=message,proto3" json:"message,omitempty"`
+	Code          string                 `protobuf:"bytes,20,opt,name=code,proto3" json:"code,omitempty"`
+	Cause         string                 `protobuf:"bytes,25,opt,name=cause,proto3" json:"cause,omitempty"`
+	Remedy        string                 `protobuf:"bytes,30,opt,name=remedy,proto3" json:"remedy,omitempty"`
+	DocsUrl       string                 `protobuf:"bytes,35,opt,name=docs_url,json=docsUrl,proto3" json:"docs_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1077,6 +1081,34 @@ func (x *AddNodelogRequest) GetSeverity() int32 {
 func (x *AddNodelogRequest) GetMessage() string {
 	if x != nil {
 		return x.Message
+	}
+	return ""
+}
+
+func (x *AddNodelogRequest) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *AddNodelogRequest) GetCause() string {
+	if x != nil {
+		return x.Cause
+	}
+	return ""
+}
+
+func (x *AddNodelogRequest) GetRemedy() string {
+	if x != nil {
+		return x.Remedy
+	}
+	return ""
+}
+
+func (x *AddNodelogRequest) GetDocsUrl() string {
+	if x != nil {
+		return x.DocsUrl
 	}
 	return ""
 }
@@ -1604,12 +1636,16 @@ const file_nodeward_l2sec_proto_rawDesc = "" +
 	"\x06caCert\x18F \x01(\tR\x06caCert\"-\n" +
 	"\x13UpdateStatusRequest\x12\x16\n" +
 	"\x06status\x18\x05 \x01(\tR\x06status\"\x16\n" +
-	"\x14UpdateStatusResponse\"]\n" +
+	"\x14UpdateStatusResponse\"\xba\x01\n" +
 	"\x11AddNodelogRequest\x12\x12\n" +
 	"\x04type\x18\x05 \x01(\tR\x04type\x12\x1a\n" +
 	"\bseverity\x18\n" +
 	" \x01(\x05R\bseverity\x12\x18\n" +
-	"\amessage\x18\x0f \x01(\tR\amessage\"\x14\n" +
+	"\amessage\x18\x0f \x01(\tR\amessage\x12\x12\n" +
+	"\x04code\x18\x14 \x01(\tR\x04code\x12\x14\n" +
+	"\x05cause\x18\x19 \x01(\tR\x05cause\x12\x16\n" +
+	"\x06remedy\x18\x1e \x01(\tR\x06remedy\x12\x19\n" +
+	"\bdocs_url\x18# \x01(\tR\adocsUrl\"\x14\n" +
 	"\x12AddNodelogResponse\"\x1d\n" +
 	"\x1bGetControlPlaneNodesRequest\"\xe5\x01\n" +
 	"\x1cGetControlPlaneNodesResponse\x12w\n" +

@@ -8,8 +8,21 @@ import (
 )
 
 // AddNodelog sends a node-scoped log entry to Nodeward with the given severity,
-// type and message.
+// type and message. The structured failure fields (code/cause/remedy/docs_url)
+// are left empty; use AddNodelogStructured to populate them.
 func AddNodelog(severity int, logType string, message string) error {
+	return AddNodelogStructured(severity, logType, message, "", "", "", "")
+}
+
+// AddNodelogStructured sends a node-scoped log entry to Nodeward with the given
+// severity, type and message plus optional structured failure fields:
+//   - code:    a stable machine error code (e.g. NA_APT_LOCK, NA_GENERIC)
+//   - cause:   a plain-language cause
+//   - remedy:  the user-facing 'Try:' remedy
+//   - docsUrl: an optional docs link (may be empty)
+//
+// All structured fields are optional and back-compatible (empty when not set).
+func AddNodelogStructured(severity int, logType, message, code, cause, remedy, docsUrl string) error {
 	c, _, backendCancel, conn, err := NodewardL2Sec()
 	if err != nil {
 		return err
@@ -23,6 +36,10 @@ func AddNodelog(severity int, logType string, message string) error {
 		Severity: int32(severity),
 		Type:     logType,
 		Message:  message,
+		Code:     code,
+		Cause:    cause,
+		Remedy:   remedy,
+		DocsUrl:  docsUrl,
 	}
 
 	roslog.I("Sending AddNodelogRequest", "request", request)

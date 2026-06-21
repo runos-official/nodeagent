@@ -7,6 +7,21 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.5.0
+
+Structured node logs. Install-command failures now send a stable machine error
+code + plain-language cause + remedy as structured fields (not just free text)
+to Nodeward, so the console node page renders an actionable Cause / Try / code
+block and support can match on a stable code.
+
+### Added
+- `commons.classifyCommandFailure` returns a stable `code` (NA_APT_LOCK,
+  NA_DISK_FULL, NA_NET_UNREACH, NA_PKG_NOTFOUND, NA_HELD_PKGS, NA_PERMISSION,
+  NA_KUBEADM, NA_CONTAINERD, NA_REPO_GPG, NA_GENERIC) alongside the cause+remedy.
+- `backend.AddNodelogStructured` sends `code`/`cause`/`remedy`/`docs_url` on the
+  L2SEC `AddNodelogRequest` (new proto fields 20/25/30/35); the plain
+  `AddNodelog` wrapper is unchanged for existing callers. Back-compatible.
+
 ## v1.4.0
 
 CLI quality pass: every `runos` subcommand audited (132 findings) and brought to
