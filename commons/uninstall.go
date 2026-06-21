@@ -63,13 +63,28 @@ func Uninstall(full bool) error {
 
 	// --- Kubernetes (load-bearing) -----------------------------------------
 	// kubeadm reset can hang on a wedged container runtime / etcd, so bound it.
+	// Only reset if kubeadm is actually installed: an absent kubeadm means there
+	// is nothing to reset (the host is already clean), NOT a failure. Without this
+	// guard a re-run on a half-uninstalled box wedges forever — `timeout` can't
+	// exec the missing kubeadm (exit 127), which marked this load-bearing step
+	// failed and made `runos uninstall` report a partial uninstall on every retry.
 	roslog.Print("Removing Kubernetes... ")
-	critical("kubeadm reset", "timeout 120 kubeadm reset -f")
-	// Remove cluster + etcd data (load-bearing: leftover etcd data is the worst
-	// thing to silently keep on a "uninstalled" node).
-	critical("wipe /etc/kubernetes", "rm -rf /etc/kubernetes")
-	critical("wipe /var/lib/kubelet", "rm -rf /var/lib/kubelet")
-	critical("wipe /var/lib/etcd", "rm -rf /var/lib/etcd")
+	critical("kubeadm reset", "if command -v kubeadm >/dev/null 2>&1; then timeout 120 kubeadm reset -f; fi")
+	// Stop kubelet + the container runtime before wiping their data dirs so nothing
+	// holds them open. kubeadm reset does this when present, but it may be absent on a
+	// half-uninstalled box (the guard above skips it), so do it explicitly. Best-effort.
+	step("timeout 30 systemctl stop kubelet || true")
+	step("timeout 30 systemctl stop containerd || true")
+	// Remove cluster + etcd data (load-bearing: leftover etcd data is the worst thing
+	// to silently keep on an "uninstalled" node). Each wipe ASSERTS the target is
+	// actually gone (`[ ! -e ... ]`): a bare `rm -rf` exits non-zero on a busy mount or
+	// immutable file, and as a load-bearing step that would wedge the uninstall as a
+	// permanent "partial uninstall" on every retry. /var/lib/kubelet can hold live
+	// pod-volume mounts (SA-token / secret / emptyDir tmpfs), so lazy-unmount
+	// everything under it (deepest first) before removing, or `rm` fails "device busy".
+	critical("wipe /etc/kubernetes", "rm -rf /etc/kubernetes; [ ! -e /etc/kubernetes ]")
+	critical("wipe /var/lib/kubelet", "awk '$2 ~ \"^/var/lib/kubelet\" {print $2}' /proc/mounts | sort -r | while read -r m; do umount -lf \"$m\" 2>/dev/null || true; done; rm -rf /var/lib/kubelet; [ ! -e /var/lib/kubelet ]")
+	critical("wipe /var/lib/etcd", "rm -rf /var/lib/etcd; [ ! -e /var/lib/etcd ]")
 	step("rm -rf ~/.kube || true")
 	// CNI configurations (best-effort)
 	step("rm -rf /etc/cni || true")
@@ -127,10 +142,17 @@ func Uninstall(full bool) error {
 	roslog.Print("Removing packages... ")
 	// Unhold the held Kubernetes packages so they can be purged (best-effort).
 	step("apt-mark unhold kubelet kubeadm kubectl || true")
-	// Remove ALL RunOS-installed packages in a SINGLE non-interactive apt-get
-	// (was five separate, slow, lock-contending invocations — the long delay).
-	// Bounded by the dpkg-lock timeout above plus an overall `timeout`.
-	critical("purge packages", "DEBIAN_FRONTEND=noninteractive timeout 300 "+aptGet+" remove --purge dnsmasq kubeadm kubectl kubelet kubernetes-cni containerd wireguard wireguard-tools haproxy")
+	// Purge ALL RunOS-installed packages in a SINGLE non-interactive apt-get (was
+	// five separate, slow, lock-contending invocations — the long delay). Bounded
+	// by the dpkg-lock timeout above plus an overall `timeout`.
+	//
+	// Purge only the subset dpkg still tracks (installed or residual-config). Once
+	// the k8s apt repo is removed — a best-effort step just below, which a PRIOR
+	// partial uninstall may already have run — `apt-get remove kubeadm ...` fails
+	// with "Unable to locate package" (exit 100) for the now-unknown names, which
+	// wedged the uninstall on every retry. dpkg-query lists the present names; if
+	// none remain there is nothing to purge and the step is a clean no-op.
+	critical("purge packages", "pkgs=$(dpkg-query -W -f='${Package}\\n' dnsmasq kubeadm kubectl kubelet kubernetes-cni containerd wireguard wireguard-tools haproxy 2>/dev/null); if [ -n \"$pkgs\" ]; then DEBIAN_FRONTEND=noninteractive timeout 300 "+aptGet+" remove --purge $pkgs; else echo 'no RunOS packages present to purge'; fi")
 	step("DEBIAN_FRONTEND=noninteractive timeout 120 " + aptGet + " autoremove || true")
 	step("apt-get clean || true")
 	// Remove Kubernetes apt repo (best-effort)

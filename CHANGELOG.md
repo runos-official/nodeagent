@@ -7,6 +7,22 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.5.3
+
+### Fixed
+- **`runos uninstall` is now idempotent — it no longer wedges on a half-uninstalled
+  node.** Two load-bearing steps failed on *every* retry once their targets were
+  already gone: `kubeadm reset` exited 127 when kubeadm was absent, and `purge
+  packages` exited 100 ("Unable to locate package") once the Kubernetes apt repo had
+  been removed by a prior partial run, so apt could no longer resolve the names. Both
+  now treat "already removed" as success: kubeadm reset is guarded by `command -v
+  kubeadm`, and the purge targets only the packages dpkg still tracks. The `rm -rf`
+  wipes now stop kubelet/containerd first, lazy-unmount any live pod-volume mounts
+  under `/var/lib/kubelet`, and assert the target is actually gone, so a busy mount or
+  immutable file can no longer turn a re-runnable cleanup into a permanent "partial
+  uninstall". Net effect: `runos uninstall` succeeds (and clears `/etc/runos`, then
+  reboots) regardless of how partially-uninstalled the node already was.
+
 ## v1.5.2
 
 ### Fixed
