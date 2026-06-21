@@ -7,6 +7,19 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.5.1
+
+### Fixed
+- **`runos update` no longer pipes a remote script into root bash.** The
+  self-update previously did `curl <installer>/update | sudo bash`, trusting an
+  unverified remote script as root (a root-RCE vector if the installer host were
+  compromised). It now, entirely in Go: downloads the exact release binary
+  (`nodeagent-linux-<arch>`) from GitHub Releases, verifies its sha256 against
+  the release's `checksums.txt`, and only on match atomically swaps
+  `/usr/local/bin/runos` (temp file + rename) and restarts the service. Fails
+  closed with a clear message + non-zero exit on any download/checksum/restart
+  error.
+
 ## v1.5.0
 
 Structured node logs. Install-command failures now send a stable machine error
