@@ -7,6 +7,17 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.5.4
+
+### Fixed
+- **Preflight clock-skew now self-heals instead of blocking automated provisions.**
+  A freshly-provisioned cloud node often boots before its clock is NTP-synced; the
+  clock-skew preflight check then BLOCKED with "sudo timedatectl set-ntp true" — fine
+  for a manual install, but a dead end for automated cloud provisioning (add-server)
+  where there is no operator to run it (and no console feedback). The check now enables
+  NTP (`timedatectl set-ntp true`) and waits up to ~45s for sync before re-checking,
+  failing only if the clock genuinely will not sync (e.g. NTP egress on UDP 123 blocked).
+
 ## v1.5.3
 
 ### Fixed

@@ -146,10 +146,24 @@ func checkClockSkew() error {
 		roslog.W("could not query clock sync state; skipping clock check", err)
 		return nil
 	}
-	if strings.TrimSpace(string(out)) != "yes" {
-		return fmt.Errorf("system clock is not NTP-synchronized; TLS handshakes to Nodeward and package mirrors may fail with 'certificate not yet valid/expired'\n\nFix with:\n  sudo timedatectl set-ntp true\nThen wait ~10s, verify with 'timedatectl', and re-run")
+	if strings.TrimSpace(string(out)) == "yes" {
+		return nil
 	}
-	return nil
+	// Not synced yet. A freshly-provisioned cloud box often just hasn't synced its
+	// clock; blocking here would break automated provisioning (the operator never
+	// sees this, and there's nobody to run the fix). So self-heal: enable NTP and
+	// wait briefly for sync, then re-check. Only fail if the clock genuinely refuses
+	// to sync (e.g. NTP egress on UDP 123 is blocked) -- a real environment problem.
+	roslog.I("clock not NTP-synchronized; enabling NTP (timedatectl set-ntp true) and waiting up to 45s for sync")
+	_ = exec.Command(path, "set-ntp", "true").Run()
+	for i := 0; i < 15; i++ {
+		time.Sleep(3 * time.Second)
+		if out, err = exec.Command(path, "show", "-p", "NTPSynchronized", "--value").Output(); err == nil && strings.TrimSpace(string(out)) == "yes" {
+			roslog.I("clock is now NTP-synchronized")
+			return nil
+		}
+	}
+	return fmt.Errorf("system clock is not NTP-synchronized and did not sync after enabling NTP and waiting ~45s; TLS handshakes to Nodeward and package mirrors may fail with 'certificate not yet valid/expired'\n\nThe installer already ran 'timedatectl set-ntp true' -- check NTP egress (UDP 123 outbound) and 'timedatectl', then re-run")
 }
 
 // checkNodewardReachable dials the configured Nodeward host on its registration
