@@ -258,9 +258,6 @@ func handleInstruction(instruction *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
 	case UninstallNodeRequestType:
 		response, err = HandleUninstallNode()
 
-	case ReinstallNodeRequestType:
-		response, err = HandleReinstallNode(instruction)
-
 	case RemoveEtcdMemberRequestType:
 		response, err = HandleRemoveEtcdMember(instruction)
 

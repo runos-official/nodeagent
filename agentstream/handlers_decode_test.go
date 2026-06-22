@@ -95,19 +95,6 @@ func TestHandleRemoveEtcdMember_BadBase64(t *testing.T) {
 	}
 }
 
-// TestHandleReinstallNode_BadBase64 verifies the reinstall handler rejects an
-// invalid payload at the decode boundary before any uninstall/reboot side effect.
-func TestHandleReinstallNode_BadBase64(t *testing.T) {
-	in := &pb.ToNodeAgent{Type: ReinstallNodeRequestType, Tag: "t6", JsonB64: "###"}
-	resp, err := HandleReinstallNode(in)
-	if err == nil {
-		t.Fatal("expected error for invalid base64 payload, got nil")
-	}
-	if resp != nil {
-		t.Fatalf("expected nil response on decode error, got %+v", resp)
-	}
-}
-
 // TestHandleVipAssign_BadPayloadSuppressesAck verifies the VIP_ASSIGN contract:
 // a malformed payload must return (nil, nil) so the dispatcher suppresses the
 // ack and Nodeward hands off to the next candidate, rather than returning an
