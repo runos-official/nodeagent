@@ -7,6 +7,27 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.5.5-rc.1
+
+### Fixed
+- **Deleting the control-plane node that holds etcd leadership no longer orphans its
+  etcd member.** etcd refuses to cleanly remove the member that is the current raft
+  leader, so the node-delete abandon phase's `member remove` silently no-op'd and left
+  a permanent orphan voting member (quorum stayed inflated, so the cluster tolerated
+  fewer real failures, and an operator had to remove the member by hand). Reproduced
+  live 2/2 when deleting the leader, 0/2 on non-leaders. `RemoveEtcdMemberDirect` now
+  detects when the target is the current leader and transfers raft leadership to a
+  healthy, started, non-learner survivor first (`etcdctl move-leader`, directed at the
+  leader's own client endpoint, since move-leader must hit the current leader), waits
+  for leadership to settle off the target (~10s), then removes it against the local
+  endpoint as before. If no eligible transferee exists or leadership does not move, it
+  errors WITHOUT removing rather than orphaning, so the caller retries/aborts.
+  Non-leader removals (live or already-dead) are unchanged.
+
+### Removed
+- **Removed the `REINSTALL_NODE` whole-node reinstall handler.** The whole-node
+  reinstall feature was killed; its instruction handler and stream wiring are gone.
+
 ## v1.5.4
 
 ### Fixed
