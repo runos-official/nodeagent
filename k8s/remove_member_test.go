@@ -60,7 +60,7 @@ func TestBuildRemoveEtcdMemberCmd_DistinctInputs(t *testing.T) {
 // a wrong endpoint or a swapped transferee silently fails the transfer and the
 // subsequent leader-removal would orphan the member, so pin the exact shape.
 func TestBuildMoveLeaderArgs(t *testing.T) {
-	args := buildMoveLeaderArgs("https://10.0.0.1:2379", "a8208c4dee07b533")
+	args := buildMoveLeaderArgs("https://10.0.0.1:2379", "8e9e05c52164694d")
 	joined := strings.Join(args, " ")
 
 	mustContain := []string{
@@ -69,7 +69,7 @@ func TestBuildMoveLeaderArgs(t *testing.T) {
 		"--cert=/etc/kubernetes/pki/etcd/peer.crt",
 		"--key=/etc/kubernetes/pki/etcd/peer.key",
 		"move-leader",
-		"a8208c4dee07b533",
+		"8e9e05c52164694d",
 	}
 	for _, sub := range mustContain {
 		if !strings.Contains(joined, sub) {
@@ -79,7 +79,7 @@ func TestBuildMoveLeaderArgs(t *testing.T) {
 
 	// The transferee ID must be the last arg (the move-leader target), and the
 	// subcommand must immediately precede it.
-	if got := args[len(args)-1]; got != "a8208c4dee07b533" {
+	if got := args[len(args)-1]; got != "8e9e05c52164694d" {
 		t.Errorf("expected transferee ID as the last arg, got %q (full: %s)", got, joined)
 	}
 	if got := args[len(args)-2]; got != "move-leader" {
