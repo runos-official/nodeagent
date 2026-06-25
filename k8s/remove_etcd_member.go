@@ -70,6 +70,21 @@ func RemoveEtcdMemberDirect(memberID string) error {
 		return fmt.Errorf("cannot remove member: only %d member(s) remain", len(members))
 	}
 
+	// Step 3.5: etcd will not cleanly remove the member that is the current raft
+	// leader — `member remove <leaderID>` silently no-ops and leaves the member
+	// orphaned (bug #101). If the target is the leader, transfer leadership to a
+	// healthy survivor first; only then does the removal commit. Determining the
+	// leader is best-effort: if it can't be read we fall through to the removal,
+	// which is correct for the common non-leader case (health already passed).
+	if leaderID, err := getEtcdLeader(); err != nil {
+		roslog.W("Could not determine etcd leader before removal; proceeding", err)
+	} else if leaderID == memberID {
+		roslog.I("Target is the current etcd leader; transferring leadership before removal", "memberId", memberID)
+		if err := moveLeadershipAwayFrom(memberID); err != nil {
+			return fmt.Errorf("refusing to remove etcd leader %s: %v", memberID, err)
+		}
+	}
+
 	roslog.I("Removing etcd member", "id", memberID, "name", targetMember.Name)
 
 	// Step 4: Execute the removal command using direct etcdctl
@@ -115,6 +130,87 @@ func RemoveEtcdMemberDirect(memberID string) error {
 
 	// Final verification failed
 	return fmt.Errorf("member removal completed but verification failed after 30 seconds")
+}
+
+// buildMoveLeaderArgs assembles the etcdctl argv that transfers raft leadership
+// to transfereeID. leaderEndpoint MUST be (or include) the CURRENT leader's own
+// client endpoint: etcdctl move-leader locates the leader among the given
+// --endpoints and errors ("no leader endpoint given") if none of them is the
+// leader. Kept pure so the argv assembly is unit-testable without a live etcd.
+func buildMoveLeaderArgs(leaderEndpoint, transfereeID string) []string {
+	return []string{
+		"--endpoints=" + leaderEndpoint,
+		"--cacert=/etc/kubernetes/pki/etcd/ca.crt",
+		"--cert=/etc/kubernetes/pki/etcd/peer.crt",
+		"--key=/etc/kubernetes/pki/etcd/peer.key",
+		"move-leader", transfereeID,
+	}
+}
+
+// moveLeadershipAwayFrom transfers etcd raft leadership off targetID to a
+// healthy, started, voting (non-learner) survivor and waits for it to settle.
+// Required because etcd refuses to cleanly remove the current raft leader:
+// removing the leader silently no-ops and orphans the member (bug #101).
+//
+// It returns an error WITHOUT removing anything when there is no eligible
+// transferee or leadership does not move within the timeout, so the caller
+// aborts rather than orphaning the member (Nodeward then retries/aborts).
+func moveLeadershipAwayFrom(targetID string) error {
+	members, err := listEtcdMembersDirectExtended()
+	if err != nil {
+		return fmt.Errorf("failed to list members for leader transfer: %v", err)
+	}
+
+	// Pick the first healthy, started, non-learner survivor as transferee, and
+	// capture the target's own client URL (move-leader must be directed at the
+	// current leader's endpoint) plus all client URLs as a fallback.
+	var transferee *EtcdMemberV2
+	var targetClientURLs string
+	var allClientURLs []string
+	for i := range members {
+		m := &members[i]
+		if m.ClientURLs != "" {
+			allClientURLs = append(allClientURLs, m.ClientURLs)
+		}
+		if m.ID == targetID {
+			targetClientURLs = m.ClientURLs
+			continue
+		}
+		if transferee == nil && m.Started && !m.IsLearner && getMemberHealth(m.ClientURLs) == "healthy" {
+			transferee = m
+		}
+	}
+	if transferee == nil {
+		return fmt.Errorf("no healthy non-learner survivor available to receive etcd leadership from %s", targetID)
+	}
+
+	// move-leader must hit the current leader (the target). Prefer the target's
+	// own client URL; fall back to all members so etcdctl can still locate it.
+	leaderEndpoint := targetClientURLs
+	if leaderEndpoint == "" {
+		leaderEndpoint = strings.Join(allClientURLs, ",")
+	}
+
+	roslog.I("Transferring etcd leadership before removal", "from", targetID, "to", transferee.ID)
+	output, err := exec.Command("etcdctl", buildMoveLeaderArgs(leaderEndpoint, transferee.ID)...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("etcdctl move-leader to %s failed: %v, output: %s", transferee.ID, err, string(output))
+	}
+
+	// Wait for leadership to settle off the target (~10s).
+	for i := 0; i < 10; i++ {
+		time.Sleep(1 * time.Second)
+		leaderID, err := getEtcdLeader()
+		if err != nil {
+			roslog.W("Failed to read etcd leader while waiting for transfer to settle", err)
+			continue
+		}
+		if leaderID != targetID {
+			roslog.I("etcd leadership moved off target", "newLeader", leaderID, "target", targetID)
+			return nil
+		}
+	}
+	return fmt.Errorf("etcd leadership did not move off %s within timeout after move-leader", targetID)
 }
 
 // GetEtcdClusterInfo returns comprehensive etcd cluster information
