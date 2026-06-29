@@ -7,7 +7,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
-## v1.5.5-rc.1
+## v1.5.5
 
 ### Fixed
 - **Deleting the control-plane node that holds etcd leadership no longer orphans its
