@@ -270,3 +270,80 @@ func withGlobals(t *testing.T, base, dst string) {
 		binaryPath = origPath
 	})
 }
+
+// withAdvertisedSource stubs the conductor base URL + account id used by the
+// advertised-version resolver, restoring both when the test ends.
+func withAdvertisedSource(t *testing.T, base, aid string) {
+	t.Helper()
+	origBase, origAID := conductorBaseURL, advertisedAID
+	conductorBaseURL = func() string { return base }
+	advertisedAID = func() string { return aid }
+	t.Cleanup(func() {
+		conductorBaseURL = origBase
+		advertisedAID = origAID
+	})
+}
+
+// TestResolveAdvertisedVersion pins the bare-`runos update` resolution: it must
+// return the EXACT tag conductor advertises for the account and fail closed on any
+// ambiguity (empty/unparseable body, non-2xx, missing conductor URL or aid) rather
+// than guess or fall back to a floating version.
+func TestResolveAdvertisedVersion(t *testing.T) {
+	t.Run("returns the exact advertised tag", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/acct1/node-agent-version" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write([]byte(`{"version":"1.5.5"}`))
+		}))
+		t.Cleanup(srv.Close)
+		withAdvertisedSource(t, srv.URL, "acct1")
+
+		got, err := resolveAdvertisedVersion()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "1.5.5" {
+			t.Errorf("got %q, want %q", got, "1.5.5")
+		}
+	})
+
+	t.Run("empty advertised version fails closed", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"version":""}`))
+		}))
+		t.Cleanup(srv.Close)
+		withAdvertisedSource(t, srv.URL, "acct1")
+
+		if got, err := resolveAdvertisedVersion(); err == nil {
+			t.Fatalf("expected error for empty advertised version, got %q", got)
+		}
+	})
+
+	t.Run("non-2xx fails closed", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+		withAdvertisedSource(t, srv.URL, "acct1")
+
+		if got, err := resolveAdvertisedVersion(); err == nil {
+			t.Fatalf("expected error for non-2xx, got %q", got)
+		}
+	})
+
+	t.Run("missing conductor url fails closed", func(t *testing.T) {
+		withAdvertisedSource(t, "", "acct1")
+		if got, err := resolveAdvertisedVersion(); err == nil {
+			t.Fatalf("expected error for empty conductor url, got %q", got)
+		}
+	})
+
+	t.Run("missing account id fails closed", func(t *testing.T) {
+		withAdvertisedSource(t, "https://api.example.com", "")
+		if got, err := resolveAdvertisedVersion(); err == nil {
+			t.Fatalf("expected error for empty account id, got %q", got)
+		}
+	})
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/runos-official/nodeagent/backend"
+	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
 )
 
@@ -40,6 +42,59 @@ var binaryPath = "/usr/local/bin/runos"
 // downloadTimeout bounds the binary/checksum fetches so a hung installer host
 // cannot wedge the update forever.
 const downloadTimeout = 5 * time.Minute
+
+// advertisedVersionTimeout bounds the conductor query for the advertised version
+// so a hung control plane cannot wedge a bare `runos update`.
+const advertisedVersionTimeout = 15 * time.Second
+
+// conductorBaseURL returns the conductor base URL for the advertised-version
+// query. Declared as a var so tests can point it at a fixture server.
+var conductorBaseURL = config.GetConductorURL
+
+// advertisedAID returns this node's account id. Declared as a var so tests can
+// override it without touching global viper state.
+var advertisedAID = config.GetAID
+
+// resolveAdvertisedVersion asks the conductor for the EXACT node-agent version
+// advertised to this node's account:
+//
+//	GET {conductorURL}/{aid}/node-agent-version  ->  {"version":"<v>"}
+//
+// This is what a bare `runos update` (no --version) resolves to. Crucially it is
+// NOT a floating "latest": the control plane returns a specific, pinned tag, which
+// the updater then verifies (sha256 vs the release checksums) and installs exactly
+// like an explicit --version. It fails closed (returns an error, never a guess) on
+// a missing conductor URL / account id, a transport or non-2xx HTTP error, or an
+// empty/unparseable body, so the updater can never fall back to an unpinned fetch.
+func resolveAdvertisedVersion() (string, error) {
+	base := strings.TrimRight(conductorBaseURL(), "/")
+	aid := advertisedAID()
+	if base == "" || aid == "" {
+		return "", fmt.Errorf("no conductor URL or account id in config")
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", fmt.Errorf("invalid conductor URL %q: %w", base, err)
+	}
+	u = u.JoinPath(url.PathEscape(aid), "node-agent-version")
+
+	client := &http.Client{Timeout: advertisedVersionTimeout}
+	body, err := fetch(client, u.String())
+	if err != nil {
+		return "", fmt.Errorf("query %s: %w", u.String(), err)
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", fmt.Errorf("parse advertised-version response: %w", err)
+	}
+	v := strings.TrimSpace(payload.Version)
+	if v == "" {
+		return "", fmt.Errorf("conductor advertised an empty version for account %s", aid)
+	}
+	return v, nil
+}
 
 // UpdateResult is the stable, machine-readable outcome of an update run. It is
 // emitted as a single JSON object when the caller requests --json.
@@ -73,9 +128,12 @@ type UpdateResult struct {
 // placed on disk, and the script that does the verifying is this code, not a
 // remote download.
 //
-// version must be a non-empty exact tag. When empty the updater is fail-closed:
-// it will not resolve or fetch a floating "latest". (The prior behavior was the
-// same: a bare `runos update` sent no pin and the installer aborted.)
+// When version is empty (a bare `runos update`) the target is resolved from the
+// control plane: conductor's GET /{aid}/node-agent-version returns the EXACT
+// advertised tag, which is then validated and verified like an explicit pin. This
+// is never a floating "latest" -- if the advertised version cannot be resolved the
+// updater fails closed rather than fetching an unpinned binary. A non-empty version
+// must be an exact semver tag; floating values ("latest") are rejected.
 //
 // asJSON suppresses the human-readable banner/result and instead prints a single
 // UpdateResult JSON object to stdout. On failure UpdateNodeAgent returns an
@@ -88,9 +146,21 @@ func UpdateNodeAgent(version string, asJSON bool) error {
 	// values ("latest") are rejected and an empty version is fail-closed.
 	version = strings.TrimSpace(version)
 	if version == "" {
-		cause := "no target version was provided"
-		remedy := "pass an exact release tag, e.g. runos update --version v0.24.0 (floating values like 'latest' are not allowed)"
-		return fail(asJSON, version, "", cause, remedy)
+		// No explicit pin: resolve the EXACT version advertised by the control
+		// plane (conductor) for this account and pin to it. This is not a floating
+		// "latest" -- conductor returns a specific tag, which is then validated and
+		// sha256-verified against the release checksums like any --version. Still
+		// fail-closed: if resolution fails we do NOT fall back to an unpinned fetch.
+		resolved, err := resolveAdvertisedVersion()
+		if err != nil {
+			cause := fmt.Sprintf("could not resolve the advertised version: %v", err)
+			remedy := "check network access to the conductor API, or pass an exact release tag, e.g. runos update --version v0.24.0"
+			return fail(asJSON, "", "", cause, remedy)
+		}
+		version = resolved
+		if !asJSON {
+			fmt.Printf("→ Resolved advertised version: %s\n", version)
+		}
 	}
 	if !semverRe.MatchString(version) {
 		cause := fmt.Sprintf("invalid --version %q: not an exact semantic version", version)

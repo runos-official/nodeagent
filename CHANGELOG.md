@@ -7,6 +7,23 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.6.0
+
+`runos update` with no `--version` now updates to the version advertised by the
+control plane. It resolves the exact tag conductor advertises for the node's
+account (`GET {conductor}/{aid}/node-agent-version`) and installs that, verified
+against the release `checksums.txt` exactly like an explicit `--version`. It is
+never a floating "latest": if the advertised version cannot be resolved (no
+conductor URL, network/HTTP error, empty or unparseable body) the update fails
+closed rather than guessing.
+
+Previously a bare `runos update` errored with "no target version was provided"
+while the command's own help promised advertised-resolution it did not implement;
+both are now fixed. Passing an explicit `runos update --version vX.Y.Z` is
+unchanged. The conductor URL is taken from `client.server.conductor`, or derived
+`get.` -> `api.` from the installer URL, so this works on existing node configs
+that have no explicit conductor entry.
+
 ## v1.5.5
 
 ### Fixed
