@@ -27,11 +27,23 @@ const nwExecTimeout = 8 * time.Second
 // nwNetTimeout bounds network probes (HEAD requests, UDP round-trips).
 const nwNetTimeout = 6 * time.Second
 
+// nwAptUpdateTimeout bounds the real `apt-get update` run. It is deliberately
+// much larger than nwExecTimeout: apt retries slow mirrors internally, and this
+// command is the authoritative decider for the apt-sources check (a synthetic
+// probe blip must not abort an install that apt itself would survive).
+const nwAptUpdateTimeout = 75 * time.Second
+
 // nwRun executes name+args under a timeout and returns combined stdout+stderr
 // plus the error. Missing binaries / timeouts return a non-nil error; callers
 // MUST treat that as "could not determine" and not block.
 func nwRun(name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), nwExecTimeout)
+	return nwRunTimeout(nwExecTimeout, name, args...)
+}
+
+// nwRunTimeout is nwRun with a caller-chosen timeout, for the few commands
+// (the real `apt-get update`) that legitimately need more than nwExecTimeout.
+func nwRunTimeout(d time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	return string(out), err
@@ -61,7 +73,8 @@ func nwHTTPClient() *http.Client {
 			Proxy:             http.ProxyFromEnvironment,
 			DisableKeepAlives: true,
 		},
-		// Follow redirects (mirrors often 30x to a regional host).
+		// Redirects are followed by default (the k8s key URL check needs the
+		// final body); the mirror probe overrides CheckRedirect to NOT follow.
 	}
 }
 
@@ -126,13 +139,15 @@ func checkAptSourcesUsable() error {
 	}
 
 	// (1) Reachability of the node's REAL configured mirrors. We HEAD each
-	// distinct mirror root; a mirror that times out / DNS-fails is a confident
-	// block. We deliberately do NOT block on a single 404 of the root (some
-	// mirrors 403/404 a bare GET of the root) — only on no-response.
+	// distinct mirror root; any HTTP response (even 403/404, mirror roots
+	// commonly reject a bare request) proves reachability. A probe failure
+	// alone does NOT block: the probe is a single 6s shot that can lose to
+	// early-boot networking still converging (observed on fresh cloud nodes),
+	// so it only ATTRIBUTES; the real `apt-get update` below is the decider.
+	var unreachableMirrors []string
 	for _, host := range nwAptMirrorURLs() {
 		if reason, blocked := nwProbeMirrorUnreachable(host); blocked {
-			return fmt.Errorf("the apt mirror this node is configured to use is unreachable: %s (%s)\n\nThis breaks every 'apt-get update'/'apt-get install' during the install. Check egress/DNS to this host (and any HTTP(S) proxy), then run 'sudo apt-get update' until clean and re-run preflight.\nThis is pre-existing apt egress on your machine.",
-				host, reason)
+			unreachableMirrors = append(unreachableMirrors, fmt.Sprintf("%s (%s)", host, reason))
 		}
 	}
 
@@ -147,10 +162,11 @@ func checkAptSourcesUsable() error {
 		}
 	}
 
-	// (2)+(3) Run a real, bounded `apt-get update` and classify its failure
-	// class precisely (GPG vs clock vs 404 vs proxy). This is the supersede of
-	// the old checkBrokenAptSources.
-	out, err := nwRun("apt-get", "update", "-qq")
+	// (2)+(3) Run the real `apt-get update` and classify its failure class
+	// precisely (GPG vs clock vs mirror egress vs 404 vs proxy). This is the
+	// decider for mirror reachability (hence its own generous timeout: apt
+	// retries slow mirrors internally); the probe above only attributes.
+	out, err := nwRunTimeout(nwAptUpdateTimeout, "apt-get", "update", "-qq")
 	if err != nil {
 		low := strings.ToLower(out)
 		switch {
@@ -166,6 +182,13 @@ func checkAptSourcesUsable() error {
 		case nwContainsAny(low, "407 ", "proxy authentication", "could not resolve 'proxy", "tunnel connection failed"):
 			return fmt.Errorf("apt cannot use the configured HTTP(S) proxy (authentication/tunnel failure), so package fetches will fail\n\napt said:\n%s\nFix the proxy settings apt uses (env http_proxy/https_proxy and /etc/apt/apt.conf.d/*proxy*), then run 'sudo apt-get update' until clean and re-run preflight.",
 				nwIndentBlock(nwTrimAptNoise(out)))
+		// Mirror egress class: the root probe already saw these hosts fail
+		// (timeout/DNS/refused) and the real apt-get update failed too, so
+		// attribute to egress rather than letting the output fall into the
+		// misleading 'failed to fetch' 404 class below.
+		case len(unreachableMirrors) > 0:
+			return fmt.Errorf("the apt mirror(s) this node is configured to use are unreachable: %s\n\n'apt-get update' also failed, so this is a real apt egress problem, not a probe blip. It breaks every 'apt-get update'/'apt-get install' during the install. Check egress/DNS to these hosts (and any HTTP(S) proxy), then run 'sudo apt-get update' until clean and re-run preflight.\nThis is pre-existing apt egress on your machine.\n\napt said:\n%s",
+				strings.Join(unreachableMirrors, ", "), nwIndentBlock(nwTrimAptNoise(out)))
 		// 404 / missing Release file class.
 		case nwContainsAny(low, "does not have a release file", "404  not found", "404 not found", "failed to fetch"):
 			return fmt.Errorf("apt cannot fetch a repository's Release file (404 / missing), so 'apt-get update' fails for the install\n\napt said:\n%s\nA repo under /etc/apt/sources.list.d/ points at a path/suite that no longer exists; correct or remove it, then run 'sudo apt-get update' until clean and re-run preflight.",
@@ -178,6 +201,14 @@ func checkAptSourcesUsable() error {
 			roslog.W("apt-get update returned non-zero but the cause was unclear; not blocking", err, "output", nwTrimAptNoise(out))
 			return nil
 		}
+	}
+
+	// The synthetic probe lost but the real apt-get update succeeded: that is
+	// a transient blip (typically early-boot networking on a fresh cloud
+	// node), not an egress problem. Log it and proceed.
+	if len(unreachableMirrors) > 0 {
+		roslog.W("apt mirror root probe failed but 'apt-get update' succeeded; treating the probe failure as transient", nil,
+			"mirrors", strings.Join(unreachableMirrors, ", "))
 	}
 
 	// (7) universe must be enabled or wireguard/dnsmasq have no candidate. Only
@@ -499,10 +530,16 @@ func nwMirrorRoot(u string) string {
 
 // nwProbeMirrorUnreachable HEADs a mirror root and returns (reason, true) only
 // when the host is confidently unreachable (DNS failure, connection refused,
-// timeout). Any HTTP response — even 403/404/5xx — proves reachability, so we do
-// NOT block on those (mirror roots commonly 403 a bare request).
+// timeout). Any HTTP response (even 30x/403/404/5xx) proves reachability, so
+// we do NOT block on those (mirror roots commonly 403 a bare request).
+// Redirects are deliberately NOT followed: mirror roots often 30x to a host
+// apt never contacts (security.ubuntu.com 301s to www.ubuntu.com), and
+// following would spend the probe's single 6s budget on the wrong host.
 func nwProbeMirrorUnreachable(root string) (string, bool) {
 	client := nwHTTPClient()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	req, err := http.NewRequest(http.MethodHead, root, nil)
 	if err != nil {
 		return "", false // malformed URL -> inconclusive, don't block

@@ -7,6 +7,23 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.6.1
+
+### Fixed
+- **The apt-sources preflight check no longer hard-blocks an install on a
+  transient mirror-probe timeout.** The mirror-root HEAD probe was a single
+  6-second shot that also followed redirects, so on a fresh node whose
+  networking was still converging (or whose mirror root 301s to a host apt
+  never contacts, like security.ubuntu.com to www.ubuntu.com) it could time
+  out and abort the install even though apt itself was healthy. The probe now
+  treats any HTTP response (including a redirect, without following it) as
+  proof of reachability and no longer blocks on its own: the real
+  `apt-get update` (now run under its own generous 75s budget instead of the
+  generic 8s exec cap) is the decider. Genuinely broken apt egress still
+  blocks, now with accurate attribution listing the unreachable mirrors, and
+  a probe blip that apt survives is logged as transient and the install
+  proceeds.
+
 ## v1.6.0
 
 `runos update` with no `--version` now updates to the version advertised by the
