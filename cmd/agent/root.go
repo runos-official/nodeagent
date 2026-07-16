@@ -82,9 +82,13 @@ agent verifies its mTLS certificate before starting.`,
 			roslog.I("Certificate was automatically renewed")
 		}
 
-		if err := syncUc.ForceVpnSync(); err != nil {
-			roslog.W("VPN sync before agent start failed; peers may be stale until the next sync (run `runos sync vpn` to retry). Continuing.", err)
-		}
+		// VPN peer sync now runs inside runConnection on every (re)connect, plus a
+		// periodic self-heal ticker (see startVpnResyncTicker). Doing it here as a
+		// one-shot ran before the network was routable on a hibernate/wake, failed
+		// silently (it only logged), and was never retried, leaving wg0 with no
+		// peers until a manual `systemctl restart runos`. runConnection only syncs
+		// after the stream connects (network confirmed up), so the wake case now
+		// self-heals.
 		runAgent()
 		return nil
 	},
@@ -191,11 +195,40 @@ const (
 	reconnectBackoffFactor  = 2
 )
 
-// runAgent handles the main agent functionality. The one-time startup work
-// (initial VPN install/sync) happens in the cobra Run BEFORE this is called and
-// is NOT repeated on reconnect. Here we supervise only the per-connection work:
-// the dial, the bidirectional instruction stream, and the proxy/heartbeat
-// services that live for the duration of a single connection.
+// vpnResyncInterval is the cadence of the background VPN peer self-heal. The
+// per-(re)connect sync in runConnection handles the common case; this slow
+// ticker only backstops a peer table that goes stale mid-connection (e.g. a
+// membership change we missed, or post-resume WireGuard handshake rejection),
+// so it is deliberately infrequent to keep Nodeward load negligible.
+const vpnResyncInterval = 60 * time.Second
+
+// startVpnResyncTicker re-runs the VPN peer sync every vpnResyncInterval until
+// ctx is cancelled (i.e. for the life of one connection). Failures are logged
+// and retried on the next tick; they never tear down the connection. It returns
+// immediately, running the loop in a goroutine bound to ctx.
+func startVpnResyncTicker(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(vpnResyncInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := syncUc.ForceVpnSyncWithCount(); err != nil {
+					roslog.W("Periodic VPN peer resync failed; will retry on the next tick", err)
+				}
+			}
+		}
+	}()
+}
+
+// runAgent handles the main agent functionality. It supervises the per-connection
+// work: the dial, the bidirectional instruction stream, the VPN peer sync (run on
+// every connect plus a periodic self-heal ticker), and the proxy/heartbeat
+// services that live for the duration of a single connection. A reconnect re-runs
+// all of it, so a node that came up before its network was routable converges its
+// wg0 peers as soon as it can reach Nodeward.
 func runAgent() {
 	roslog.I("Starting RunOS Node Agent")
 
@@ -256,9 +289,8 @@ func runAgent() {
 			backoff = reconnectInitialBackoff
 		}
 
-		// Recoverable error: back off, then re-dial. We do NOT re-run the
-		// one-time VPN install/sync here; only the per-connection services are
-		// re-established.
+		// Recoverable error: back off, then re-dial. The per-connection services,
+		// including the VPN peer sync, are re-established by the next runConnection.
 		roslog.W("Connection to Nodeward lost; reconnecting after backoff", nil, "backoff", backoff.String())
 		select {
 		case <-rootCtx.Done():
@@ -323,6 +355,28 @@ func runConnection(rootCtx context.Context) (shutdown bool) {
 		<-streamDone
 		return rootCtx.Err() != nil
 	}
+
+	// VPN peer self-heal: re-apply the WireGuard peer table on every (re)connect,
+	// before HAProxy starts (its Kubernetes API backends are the control-plane
+	// peers reached over wg0). This is the reliable path that fixes the
+	// wake-from-hibernate case: a node that boots before its network is routable
+	// runs its startup sync too early and fails; here we sync only after the
+	// stream has connected (network confirmed up), so wg0 converges instead of
+	// sitting with a stale/empty peer table until a manual `systemctl restart
+	// runos`. Best-effort: a transient sync failure must not tear down an
+	// otherwise-healthy connection, so we log and continue; the periodic resync
+	// below and the next reconnect retry it.
+	if skipped, err := syncUc.ForceVpnSyncWithCount(); err != nil {
+		roslog.W("VPN peer sync on connect failed; will retry on the periodic resync and next reconnect", err)
+	} else if skipped > 0 {
+		roslog.W("VPN peer sync on connect applied with some peers skipped", nil, "skipped", skipped)
+	}
+
+	// Periodic self-heal for the life of this connection: keeps converging the
+	// peer table even without a reconnect event (peers changed while we were
+	// briefly unreachable, or a post-resume clock skew rejected the initial
+	// WireGuard handshakes until a fresh `wg set`).
+	startVpnResyncTicker(connCtx)
 
 	// Start the Kubernetes API proxy server.
 	proxyDone := agentstream.StartHAProxyServer(connCtx)

@@ -130,8 +130,14 @@ SERVICE_FILE="/etc/systemd/system/runos.service"
 cat << EOF > $SERVICE_FILE
 [Unit]
 Description=RunOS Node Agent
-After=network.target wg-quick@wg0.service
-Wants=wg-quick@wg0.service
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
+# Disable start-rate limiting: this unit is meant to always run and can be
+# explicitly restarted (operator / self-restart / wake self-heal). Without this,
+# a burst of restarts within 10s trips DefaultStartLimitBurst and systemd leaves
+# the unit failed ("start request repeated too quickly"), needing a manual
+# reset-failed on the box, exactly the stuck state we are trying to avoid.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/local/bin/runos agent

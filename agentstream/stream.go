@@ -276,6 +276,9 @@ func handleInstruction(instruction *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
 	case VipReleaseRequestType:
 		response, err = HandleVipRelease(instruction)
 
+	case RestartServiceRequestType:
+		response, err = HandleRestartService(instruction)
+
 	default:
 		err = fmt.Errorf("unknown instruction type: %s", instruction.Type)
 	}

@@ -7,6 +7,31 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.7.0-rc.1
+
+### Added
+
+- Remote `RESTART_SERVICE` instruction. Nodeward (driven by the console/CLI) can
+  restart the runos agent on a node. The handler acknowledges first, then
+  schedules the restart as a detached transient systemd unit (`systemd-run`) so
+  the ack flushes over the instruction stream before the process exits, and the
+  unit comes back under `Restart=always`. Recovers a node whose VPN/network is
+  stuck (e.g. after a wake-from-hibernate) without SSH.
+
+### Fixed
+
+- Wake-from-hibernate VPN recovery. The WireGuard peer sync now runs on every
+  Nodeward (re)connect plus a slow periodic self-heal ticker, instead of a
+  one-shot at startup. Previously a node that booted before its network was
+  routable ran the startup sync too early, failed silently, and left its peer
+  table empty/stale until a manual `systemctl restart runos`.
+- systemd ordering: the unit now waits for `network-online.target` (was
+  `network.target`), which fires before the NIC has a routable address. The
+  updater migrates already-installed units.
+- systemd start-rate limiting disabled (`StartLimitIntervalSec=0`) so an explicit
+  or self-restart cannot trip `DefaultStartLimitBurst` and leave the unit failed
+  ("start request repeated too quickly").
+
 ## v1.6.1
 
 ### Fixed

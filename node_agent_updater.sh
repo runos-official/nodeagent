@@ -85,15 +85,23 @@ mv /usr/local/bin/runos.new /usr/local/bin/runos
 echo "Ensuring systemd service configuration is up to date..." | log_output
 SERVICE_FILE="/etc/systemd/system/runos.service"
 if [ -f "$SERVICE_FILE" ]; then
-    # Check if ExecReload is present
-    if ! grep -q "ExecReload=" "$SERVICE_FILE"; then
-        echo "Updating systemd service to support reload..." | log_output
-        # Recreate the service file with ExecReload
+    # Migrate the unit if it lacks ExecReload OR still orders on network.target
+    # instead of network-online.target. The latter matters for wake-from-hibernate
+    # on cloud nodes: network.target fires before the NIC has a routable address,
+    # so the agent (and its startup VPN sync) can start before the network is up.
+    if ! grep -q "ExecReload=" "$SERVICE_FILE" || ! grep -q "network-online.target" "$SERVICE_FILE"; then
+        echo "Updating systemd service (reload support + network-online ordering)..." | log_output
+        # Recreate the service file with ExecReload and network-online.target
         cat << EOF > $SERVICE_FILE
 [Unit]
 Description=RunOS Node Agent
-After=network.target wg-quick@wg0.service
-Wants=wg-quick@wg0.service
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target wg-quick@wg0.service
+# See installer: disable start-rate limiting so explicit/self restarts cannot
+# leave the unit failed with "start request repeated too quickly". Must ship in
+# this same migration: once network-online.target is present the recreate guard
+# above skips rewriting the unit, so a later-added directive would never apply.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart=/usr/local/bin/runos agent
