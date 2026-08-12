@@ -69,6 +69,25 @@ func Uninstall(full bool) error {
 	// exec the missing kubeadm (exit 127), which marked this load-bearing step
 	// failed and made `runos uninstall` report a partial uninstall on every retry.
 	roslog.Print("Removing Kubernetes... ")
+	// Release the CSI block-device mounts BEFORE kubeadm reset, or the reset fails on ANY node
+	// that has ever hosted a virtual machine (goal 23, F9). Measured on all four campaign hosts:
+	//
+	//   Uninstall critical step failed  step="kubeadm reset"
+	//     error: ... failed to unmount ".../csi/volumeDevices/pvc-.../dev/..." : device or
+	//     resource busy
+	//
+	// Deterministic, not a race. kubeadm's own unmount is a plain umount and cannot release a
+	// bind mount whose backing DRBD device is still open, so the whole uninstall reported
+	// partial, the caller correctly refused to reboot, and the node was then left with
+	// kube-apiserver still LISTENING on 6443 and cilium-agent still running, because stopping
+	// containerd does not stop its reparented shim children.
+	//
+	// Best-effort and ordered: stop the kubelet so nothing re-attaches a volume as fast as it is
+	// detached, drop the DRBD devices that hold the bind mounts open, then lazy-unmount deepest
+	// first. Lazy, because a mount held by an orphaned process still detaches from the tree.
+	step("timeout 30 systemctl stop kubelet || true")
+	step("if command -v drbdsetup >/dev/null 2>&1; then timeout 30 drbdsetup down all || true; fi")
+	step("awk '$2 ~ \"^/var/lib/kubelet\" {print $2}' /proc/mounts | sort -r | while read -r m; do umount -lf \"$m\" 2>/dev/null || true; done")
 	critical("kubeadm reset", "if command -v kubeadm >/dev/null 2>&1; then timeout 120 kubeadm reset -f; fi")
 	// Stop kubelet + the container runtime before wiping their data dirs so nothing
 	// holds them open. kubeadm reset does this when present, but it may be absent on a

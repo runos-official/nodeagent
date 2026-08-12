@@ -540,10 +540,26 @@ func checkEgressEndpointSetComplete() error {
 
 	var unreachable []string
 	var rateLimited []string
+	// Goal 23 F4: RESOLVE FIRST, and measure it. A timeout has three distinct causes that need
+	// three different sentences, and the check used to collapse all of them into a firewall
+	// verdict pointing at infrastructure the operator often does not control. Read once for the
+	// whole loop; the file does not change mid-check.
+	resolvers := netConfiguredResolvers()
+	dnsFaults := 0
 	for _, t := range targets {
 		code, err := netProbeHTTPS(t.host, t.path)
 		if err != nil {
-			unreachable = append(unreachable, fmt.Sprintf("%s (%s): %s", t.host, t.why, netSummarizeErr(err)))
+			resolved, resolveErr, resolveTime := netMeasureResolve(t.host)
+			if !resolved || resolveTime >= netSlowResolveThreshold {
+				dnsFaults++
+			}
+			unreachable = append(unreachable, fmt.Sprintf("%s (%s): %s", t.host, t.why, netClassifyEgressFailure(netEgressDiagnosis{
+				resolved:            resolved,
+				resolveErr:          resolveErr,
+				resolveTime:         resolveTime,
+				probeErrorMsg:       err.Error(),
+				configuredResolvers: resolvers,
+			})))
 			continue
 		}
 		if code == 429 {
@@ -565,6 +581,14 @@ func checkEgressEndpointSetComplete() error {
 
 	if len(unreachable) == 0 {
 		return nil
+	}
+
+	// When DNS is the cause on every failing host, do not send the operator to a network team.
+	// The fix is on this machine, and the check has just proved it.
+	if dnsFaults == len(unreachable) {
+		return fmt.Errorf(
+			"Cannot reach required HTTPS endpoint(s) on 443:\n  - %s\n\nEvery one of these failed at NAME RESOLUTION, not at the network. Nothing here says your firewall is blocking anything. Fix DNS on this machine first: clear any stale DNS= and Domains= lines from /etc/systemd/resolved.conf (RunOS writes the cluster's own resolver there when a node joins, and nothing removes it when the cluster goes), then 'systemctl restart systemd-resolved'.\nThen re-run 'sudo runos preflight'.",
+			strings.Join(unreachable, "\n  - "))
 	}
 
 	return fmt.Errorf(

@@ -7,6 +7,39 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.7.1
+
+### Fixed
+
+- **Preflight no longer calls a dead DNS resolver a firewall block.** On a node that had
+  belonged to a RunOS cluster, the egress check reported eight endpoints as
+  `timed out (likely firewall/proxy block)` and told the operator their allowlist was
+  missing entries. Nothing was blocked: `curl https://github.com --resolve
+  github.com:443:140.82.121.4` returned 200 in 0.070s and the same URL with DNS returned
+  200 in 5.078s, because `/etc/systemd/resolved.conf` still carried the WireGuard address
+  of a dnsmasq belonging to a deleted cluster. Every lookup waited out the dead server
+  before falling back, and eight endpoints times five seconds blew the check's budget. The
+  check now resolves each host first and MEASURES it, so it can tell a name that did not
+  resolve from a resolver that is merely slow from a connection that really was blocked,
+  and when DNS is the cause on every failing host it says so and points at the file on the
+  machine rather than at a network team. RunOS writes that line itself and nothing removes
+  it, so the operator most likely to meet this is the bare-metal customer reusing their own
+  hardware.
+
+- **Uninstall releases the CSI block mounts before `kubeadm reset`.** `kubeadm reset` cannot
+  unmount the CSI volumeDevice bind mounts a virtual-machine disk leaves behind, so an
+  uninstall failed on ANY node that had ever hosted a VM. Deterministic, measured on four
+  hosts. The uninstall then correctly refused to reboot, and the node was left with
+  kube-apiserver still LISTENING on 6443 and cilium-agent still running, because stopping
+  containerd does not stop its reparented shim children. The kubelet is now stopped, DRBD
+  devices are dropped and everything under `/var/lib/kubelet` is lazy-unmounted first.
+
+- **Both remedies for a stuck port now say to reboot.** The `ports-free` preflight told the
+  operator to run `sudo kubeadm reset -f`, which is the step that had already failed and
+  which cannot kill an orphaned process or remove an interface a live cilium-agent
+  recreates. The partial-uninstall remedy said to re-run the uninstall, which cannot clear
+  it either. Only a reboot does, and neither message suggested one.
+
 ## v1.7.0
 
 ### Added

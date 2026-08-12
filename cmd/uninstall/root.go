@@ -59,10 +59,20 @@ that were installed by nodeward. This is DESTRUCTIVE: it wipes Kubernetes
 			// A partial wipe must NOT look identical to a clean one: surface the
 			// exact load-bearing steps that failed and do not reboot, so the
 			// operator can investigate the node before it disappears.
+			// The remedy names the reboot FIRST (goal 23, F9). A partial uninstall stops every
+			// systemd unit and deletes every config directory while leaving kube-apiserver
+			// listening on 6443 and cilium-agent running, because containerd's shim children are
+			// reparented rather than stopped. Re-running the uninstall cannot clear that, and
+			// neither can `kubeadm reset -f`: only a reboot does. Measured on all four campaign
+			// hosts, still serving on 6443 more than two hours later.
 			return roslog.Fail(
 				"Uninstall node",
 				uninstallErr.Error(),
-				"some components were not fully removed; inspect /var/log/runos.log, fix the cause, then re-run `runos uninstall`",
+				"some components were not fully removed, and this node has NOT been rebooted. "+
+					"Kubernetes processes orphaned from containerd may still be running and holding "+
+					"ports 6443/8472, which blocks the next install. REBOOT THIS NODE "+
+					"(`sudo systemctl reboot`), then re-run `runos uninstall` if anything remains. "+
+					"Inspect /var/log/runos.log for the failing step",
 			)
 		}
 

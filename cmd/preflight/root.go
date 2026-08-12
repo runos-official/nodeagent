@@ -123,7 +123,17 @@ func checkPortsFree() error {
 	}
 
 	if len(taken) > 0 {
-		return fmt.Errorf("required ports already in use: %s\n\nFind the owner with: sudo ss -tulpnH 'sport = :<port>'\nStop the conflicting service, or run 'sudo kubeadm reset -f' if this is a stale install, then re-run", strings.Join(taken, ", "))
+		// Goal 23 F9. The old remedy said "run 'sudo kubeadm reset -f' if this is a stale
+		// install", and on the box that produced this that is the step that had ALREADY failed:
+		// `kubeadm reset` cannot unmount the CSI volumeDevice bind mounts a VM disk leaves
+		// behind, so an uninstall on any node that has ever hosted a VM fails and never reboots.
+		// Measured on all four hosts, more than two hours later: every systemd unit reported
+		// stopped, /etc/kubernetes and /etc/runos were gone, and kube-apiserver was still
+		// LISTENING on 6443 with cilium-agent still running, because stopping containerd does not
+		// stop its shim children. They are reparented and keep going, and cilium-agent recreates
+		// any interface deleted by hand. A REBOOT is the only thing that clears it, and the
+		// message never suggested one.
+		return fmt.Errorf("required ports already in use: %s\n\nFind the owner with: sudo ss -tulpnH 'sport = :<port>'\n\nIf the owner is kube-apiserver, cilium-agent or another Kubernetes process, it is an ORPHAN from a previous install: containerd was stopped but its shim children were reparented and kept running. 'kubeadm reset -f' cannot kill an orphaned process or remove an interface a live cilium-agent recreates, so REBOOT THE NODE. Then re-run.\n\nIf the owner is your own service, stop it and re-run", strings.Join(taken, ", "))
 	}
 	return nil
 }
