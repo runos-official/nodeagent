@@ -7,6 +7,26 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.7.2
+
+### Fixed
+
+- **Two control-plane nodes can join at the same time.** `kubeadm init phase upload-certs
+  --upload-certs` generates a FRESH key on every call and re-encrypts the shared
+  `kubeadm-certs` Secret with it, so a second control-plane join starting while the first
+  was still downloading invalidated the key the first had been handed:
+
+      error execution phase control-plane-prepare/download-certs: error downloading certs:
+        error decoding secret data with provided key: cipher: message authentication failed
+
+  Reproduced twice on bare metal, forty seconds apart on the second occasion. The cost was
+  worse than one failed install: the failed attempt left the box dirty AND created a
+  duplicate node record, so the retry was then blocked by preflight until the machine was
+  cleaned by hand. The upload now passes an explicit `--certificate-key`, cached for an hour
+  (well inside kubeadm's own two-hour expiry on the Secret), so two joins are handed the same
+  key and the second upload re-encrypts with the key the first is already using. That removes
+  the race rather than narrowing its window, which is all a check can do.
+
 ## v1.7.1
 
 ### Fixed
