@@ -7,6 +7,39 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0
+
+### Changed
+
+- **A node whose LAN collides with the pod or service range is now refused at join.** The
+  join-time conflict check guarded only the WireGuard overlay ranges, so a node sitting in
+  `172.25.0.0/16` (pod) or `10.96.0.0/12` (service) passed preflight and then collided AFTER
+  install, when Cilium or kube-proxy claimed the same addresses. Both ranges are hardcoded on
+  every cluster and neither was guarded. Finding out after install costs a dirty machine and a
+  manual clean; finding out at join costs a sentence. The check is renamed `reserved-subnets`
+  because it no longer covers WireGuard alone.
+
+  The message now names the range AND what uses it, built from the guarded list rather than
+  written out in prose, so adding a range can never leave the message describing a set it no
+  longer guards. The most specific range wins, so an address in the wg1 `/21` is reported as
+  the `/21` rather than the `/16` that contains it, which used to send an operator to the
+  wrong remedy.
+
+  Two things are deliberately NOT reported. A LAN that merely CONTAINS a reserved range (a
+  provider `/8`, which is routine) is left alone, because RunOS installs more specific routes
+  and longest-prefix match sends the traffic the right way; flagging it would refuse nodes
+  that work. And RunOS's own CNI interfaces are skipped alongside the WireGuard ones, because
+  `cilium_host` holds a pod-range address that survives `kubeadm reset` until the node
+  reboots, so counting it would block a re-install on state RunOS itself created.
+
+  Verified on bare metal against a live cluster: a pod-range and a service-range interface are
+  each blocked with the interface named, a `10.0.0.5/8` interface is not, and a running node
+  whose `cilium_host` holds `172.25.0.203/32` reports no conflict.
+
+- **The check says so when it could not read the host's addresses or routes.** Both readers
+  failed open and silently, so a missing or too-old `ip` command produced a pass that read as
+  "no conflict" and proved nothing.
+
 ## v1.7.2
 
 ### Fixed

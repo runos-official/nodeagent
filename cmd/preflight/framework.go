@@ -168,7 +168,7 @@ func preflightChecks() []check {
 		{name: "install-lock", fn: checkInstallLock, sev: sevBlock},
 		{name: "capabilities", fn: checkLinuxCapabilities, sev: sevBlock},
 		{name: "immutable-paths", fn: checkImmutableTargetPaths, sev: sevBlock},
-		{name: "wireguard-subnet", fn: checkWireguardSubnetOverlap, sev: sevBlock},
+		{name: "reserved-subnets", fn: checkReservedSubnetOverlap, sev: sevBlock},
 		{name: "cloud-init", fn: checkCloudInitComplete, sev: sevBlock},
 		// clock is local (timedatectl) but must run before the network/TLS checks.
 		{name: "clock-skew", fn: checkClockSkew, sev: sevBlock},

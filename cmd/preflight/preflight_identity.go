@@ -580,12 +580,53 @@ func idGoResolves(name string) bool {
 	return err == nil && len(addrs) > 0
 }
 
-// idRunosWGCIDRs are the WireGuard overlay ranges RunOS assigns node mesh IPs
-// from. Any pre-existing local interface/route overlapping these causes
-// duplicate/asymmetric routing that breaks the mesh.
-var idRunosWGCIDRs = []string{
-	"172.24.0.0/16",   // wg0 node mesh
-	"172.24.200.0/21", // wg1 (subset of the /16, kept explicit for messaging)
+// idReservedCIDR is a range RunOS allocates addresses from, paired with the
+// words that tell an operator which part of RunOS they collided with. The
+// label is not decoration: the failure differs per range, so the remedy does
+// too. An overlay clash breaks the node mesh, a pod clash breaks the CNI, and a
+// service clash breaks kube-proxy.
+type idReservedCIDR struct {
+	CIDR  string
+	Label string
+}
+
+// idRunosReservedCIDRs are the ranges RunOS assigns addresses from. A
+// pre-existing local interface or route sitting inside one of them collides
+// with RunOS AFTER the install, which is a much worse place to find out than
+// at join time.
+//
+// Ordered MOST SPECIFIC FIRST. The first match wins, so a wg1 address must meet
+// the /21 before it meets the /16 that contains it; reported the other way
+// round it sends the operator to the wrong remedy.
+//
+// The pod and service ranges were added for goal 27 W11 (defect E). They are
+// hardcoded on every cluster the same way the overlay parent is, they were
+// unguarded, and they are ranks 1 and 2 on the collision list.
+var idRunosReservedCIDRs = []idReservedCIDR{
+	{CIDR: "172.24.200.0/21", Label: "the wg1 user VPN range"},
+	{CIDR: "172.24.0.0/16", Label: "the wg0 node mesh"},
+	{CIDR: "172.25.0.0/16", Label: "the Kubernetes pod range"},
+	{CIDR: "10.96.0.0/12", Label: "the Kubernetes service range"},
+}
+
+// idReservedNet is a parsed idReservedCIDR.
+type idReservedNet struct {
+	Net   *net.IPNet
+	CIDR  string
+	Label string
+}
+
+// idReservedNets parses idRunosReservedCIDRs, dropping anything unparseable.
+func idReservedNets() []idReservedNet {
+	nets := make([]idReservedNet, 0, len(idRunosReservedCIDRs))
+	for _, r := range idRunosReservedCIDRs {
+		_, n, err := net.ParseCIDR(r.CIDR)
+		if err != nil {
+			continue
+		}
+		nets = append(nets, idReservedNet{Net: n, CIDR: r.CIDR, Label: r.Label})
+	}
+	return nets
 }
 
 // idAddrEntry models the subset of `ip -j addr` we read.
@@ -604,116 +645,146 @@ type idRouteEntry struct {
 	PrefSrc string `json:"prefsrc"`
 }
 
-// checkWireguardSubnetOverlap blocks when an existing (non-WireGuard) interface
-// address or route on this host overlaps RunOS's WireGuard range 172.24.0.0/16.
-// An overlap (a Docker bridge, VPN, or LAN re-using 172.24/16) produces
-// duplicate routes and asymmetric routing that silently breaks the node mesh or
-// the node's own connectivity once wg0/wg1 come up. Purely local, no network.
-func checkWireguardSubnetOverlap() error {
-	wgNets := make([]*net.IPNet, 0, len(idRunosWGCIDRs))
-	for _, c := range idRunosWGCIDRs {
-		_, n, err := net.ParseCIDR(c)
-		if err == nil {
-			wgNets = append(wgNets, n)
-		}
-	}
-	if len(wgNets) == 0 {
+// checkReservedSubnetOverlap blocks when a pre-existing interface address or
+// route on this host sits inside a range RunOS allocates from. A Docker bridge,
+// VPN or LAN re-using one of those ranges produces duplicate routes and
+// asymmetric routing that silently breaks the node mesh, the CNI or service
+// routing once RunOS brings its own addresses up. Purely local, no network.
+func checkReservedSubnetOverlap() error {
+	nets := idReservedNets()
+	if len(nets) == 0 {
 		return nil
 	}
 
+	addrs, addrsOk := idParseAddrs()
+	routes, routesOk := idParseRoutes()
+	if !addrsOk && !routesOk {
+		// Both readers failed, so this check saw nothing at all. Saying so is
+		// the point: a silent pass here reads as "no conflict" and is not.
+		roslog.W("could not read local addresses or routes, so the reserved-subnet check proved nothing", nil, "check", "reserved-subnets")
+		return nil
+	}
+
+	conflicts := idReservedConflicts(addrs, routes, nets)
+	if len(conflicts) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("an existing network on this host overlaps a range RunOS allocates from:\n  %s\n\nRunOS uses %s; an overlap causes duplicate routes and asymmetric routing that breaks the node mesh, pod networking or service routing once the cluster is up.\nMove the conflicting interface/Docker bridge/VPN off that range (re-IP the Docker bridge in /etc/docker/daemon.json, or re-IP the LAN/VPN), then re-run. This is an addressing conflict in your environment, not a RunOS error.",
+		strings.Join(idDedup(conflicts), "\n  "), idReservedSummary(nets))
+}
+
+// idReservedConflicts is the pure core of checkReservedSubnetOverlap: given the
+// host's addresses and routes, it returns one line per conflict. Split out so
+// it is testable without shelling out to iproute2.
+//
+// Matching is deliberately ONE-WAY on addresses and route sources: a host
+// network that merely CONTAINS a RunOS range is not reported. RunOS installs
+// more specific routes and longest-prefix match then sends the traffic the
+// right way, so a 10.x/8 LAN coexists with the 10.96.0.0/12 service range.
+// Reporting it would refuse nodes that work, and provider private networks
+// routinely hand out /8s.
+func idReservedConflicts(addrs []idAddrEntry, routes []idRouteEntry, nets []idReservedNet) []string {
 	var conflicts []string
 
-	// Interfaces: any non-wg iface holding an address inside the wg range.
-	if addrs, ok := idParseAddrs(); ok {
-		for _, a := range addrs {
-			if idIsWGInterface(a.IfName) {
+	for _, a := range addrs {
+		if idIsRunosManagedInterface(a.IfName) {
+			continue
+		}
+		for _, ai := range a.AddrInfo {
+			ip := net.ParseIP(ai.Local)
+			if ip == nil || ip.To4() == nil {
 				continue
 			}
-			for _, ai := range a.AddrInfo {
-				ip := net.ParseIP(ai.Local)
-				if ip == nil || ip.To4() == nil {
-					continue
-				}
-				if n := idMatchWG(ip, wgNets); n != "" {
-					conflicts = append(conflicts, fmt.Sprintf("interface %s holds %s/%d (overlaps %s)", a.IfName, ai.Local, ai.PrefixLen, n))
+			if n := idMatchReserved(ip, nets); n != nil {
+				conflicts = append(conflicts, fmt.Sprintf("interface %s holds %s/%d (overlaps %s, %s)", a.IfName, ai.Local, ai.PrefixLen, n.CIDR, n.Label))
+			}
+		}
+	}
+
+	for _, r := range routes {
+		if idIsRunosManagedInterface(r.Dev) {
+			continue
+		}
+		if r.Dst != "" && r.Dst != "default" {
+			if n := idRouteOverlap(r.Dst, nets); n != nil {
+				conflicts = append(conflicts, fmt.Sprintf("route %s dev %s overlaps %s, %s", r.Dst, r.Dev, n.CIDR, n.Label))
+			}
+		}
+		if r.PrefSrc != "" {
+			if ip := net.ParseIP(r.PrefSrc); ip != nil {
+				if n := idMatchReserved(ip, nets); n != nil {
+					conflicts = append(conflicts, fmt.Sprintf("route source %s (dev %s) is inside %s, %s", r.PrefSrc, r.Dev, n.CIDR, n.Label))
 				}
 			}
 		}
 	}
 
-	// Routes: any route (not on wg0/wg1) whose destination overlaps, or whose
-	// prefsrc is inside the wg range.
-	if routes, ok := idParseRoutes(); ok {
-		for _, r := range routes {
-			if idIsWGInterface(r.Dev) {
-				continue
-			}
-			if r.Dst != "" && r.Dst != "default" {
-				if rn := idRouteOverlap(r.Dst, wgNets); rn != "" {
-					conflicts = append(conflicts, fmt.Sprintf("route %s dev %s overlaps %s", r.Dst, r.Dev, rn))
-				}
-			}
-			if r.PrefSrc != "" {
-				if ip := net.ParseIP(r.PrefSrc); ip != nil {
-					if n := idMatchWG(ip, wgNets); n != "" {
-						conflicts = append(conflicts, fmt.Sprintf("route source %s (dev %s) is inside %s", r.PrefSrc, r.Dev, n))
-					}
-				}
-			}
-		}
-	}
+	return conflicts
+}
 
-	if len(conflicts) > 0 {
-		return fmt.Errorf("an existing network on this host overlaps RunOS's WireGuard range 172.24.0.0/16:\n  %s\n\nRunOS assigns node mesh IPs from 172.24.0.0/16 (wg0) and 172.24.200.0/21 (wg1); an overlap causes duplicate routes and asymmetric routing that breaks the mesh or the node's own connectivity.\nMove the conflicting interface/Docker bridge/VPN off 172.24.0.0/16 (re-IP the Docker bridge in /etc/docker/daemon.json, or re-IP the LAN/VPN), then re-run. This is an addressing conflict in your environment, not a RunOS error.", strings.Join(idDedup(conflicts), "\n  "))
+// idReservedSummary renders the guarded ranges for the error message. Built
+// from the list rather than written out in prose, so adding a range can never
+// leave the message naming a set it no longer guards.
+func idReservedSummary(nets []idReservedNet) string {
+	parts := make([]string, 0, len(nets))
+	for _, n := range nets {
+		parts = append(parts, fmt.Sprintf("%s for %s", n.CIDR, n.Label))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// idIsRunosManagedInterface reports whether dev is an interface RunOS or its
+// CNI creates, so RunOS's own addresses never count as a pre-existing conflict.
+//
+// The CNI links matter as much as the WireGuard ones: cilium_host holds an
+// address from the pod range, and it survives a `kubeadm reset` until the node
+// reboots. Counting it would block a re-install on state RunOS itself created.
+func idIsRunosManagedInterface(dev string) bool {
+	if strings.HasPrefix(dev, "wg") || strings.HasPrefix(dev, "cilium_") || strings.HasPrefix(dev, "lxc") {
+		return true
+	}
+	return dev == "cni0" || dev == "kube-ipvs0"
+}
+
+// idMatchReserved returns the first reserved net containing ip, or nil. The
+// list is ordered most-specific-first, so the tightest range wins.
+func idMatchReserved(ip net.IP, nets []idReservedNet) *idReservedNet {
+	for i := range nets {
+		if nets[i].Net.Contains(ip) {
+			return &nets[i]
+		}
 	}
 	return nil
 }
 
-// idIsWGInterface reports whether dev is one of the WireGuard interfaces RunOS
-// itself manages (so our own future addresses/routes don't count as conflicts).
-func idIsWGInterface(dev string) bool {
-	return dev == "wg0" || dev == "wg1" || strings.HasPrefix(dev, "wg")
-}
-
-// idMatchWG returns the wg CIDR string that contains ip, or "".
-func idMatchWG(ip net.IP, wgNets []*net.IPNet) string {
-	for _, n := range wgNets {
-		if n.Contains(ip) {
-			return n.String()
-		}
-	}
-	return ""
-}
-
-// idRouteOverlap returns a wg CIDR string that overlaps the route destination
-// CIDR dst (either direction of containment), or "".
-func idRouteOverlap(dst string, wgNets []*net.IPNet) string {
+// idRouteOverlap returns the reserved net a route destination lands in, or nil.
+//
+// A route is reported only when it is AT LEAST AS SPECIFIC as the reserved
+// range, which is the case where it actually wins longest-prefix match against
+// RunOS's own routes. A less specific route covering the range loses to them
+// and is left alone, for the reason given on idReservedConflicts.
+func idRouteOverlap(dst string, nets []idReservedNet) *idReservedNet {
 	// dst may be a bare IP (host route) or a CIDR.
 	var dn *net.IPNet
 	if ip := net.ParseIP(dst); ip != nil {
 		if ip.To4() == nil {
-			return ""
+			return nil
 		}
 		dn = &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
 	} else {
 		_, parsed, err := net.ParseCIDR(dst)
 		if err != nil {
-			return ""
+			return nil
 		}
 		dn = parsed
 	}
-	for _, wn := range wgNets {
-		if idNetsOverlap(dn, wn) {
-			return wn.String()
+	for i := range nets {
+		if nets[i].Net.Contains(dn.IP) {
+			return &nets[i]
 		}
 	}
-	return ""
-}
-
-// idNetsOverlap reports whether two IPv4 networks intersect (either contains the
-// other's base address).
-func idNetsOverlap(a, b *net.IPNet) bool {
-	return a.Contains(b.IP) || b.Contains(a.IP)
+	return nil
 }
 
 // idParseAddrs runs `ip -j addr` and parses it. ok=false on any failure (tool
