@@ -80,13 +80,43 @@ func HandleSetVpnPeers(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
 	}, nil
 }
 
+// setVpnPeers converges wg0 to EXACTLY the peer set it was sent (goal 27, vpn-peer-protocol).
+//
+// It used to be additive: it looped over the supplied peers and set each one, and removed nothing.
+// So a retired node stayed a peer with a working key, and a peer once given the wrong endpoint
+// kept it forever, because there was no way to say "no endpoint". Both were permanent and silent.
+//
+// Peer fields are untrusted, so SetWgPeer validates them and passes each as a separate exec
+// argument; that has not changed. A single failing peer is logged and skipped so one bad peer does
+// not abort the rest.
 func setVpnPeers(request vpnPeerRequest) {
-	// Configure each peer via a direct (non-shell) wg invocation. Peer fields
-	// (pubKey, IPs) are untrusted, so SetWgPeer validates them and passes each
-	// as a separate exec arg; this prevents shell injection. An invalid or
-	// failing peer is logged and skipped so one bad peer does not abort the rest.
+	desired := make([]commons.WgPeer, 0, len(request.Peers))
 	for _, peer := range request.Peers {
-		if err := commons.SetWgPeer(peer.PubKey, peer.VpnIP, peer.EndpointIP); err != nil {
+		desired = append(desired, commons.WgPeer{
+			PubKey:     peer.PubKey,
+			AllowedIP:  peer.VpnIP,
+			EndpointIP: peer.EndpointIP,
+		})
+	}
+
+	// A read failure yields an empty map, which plans NO removals. That is the safe direction:
+	// treating "could not read" as "no peers are configured" would tear down every working tunnel
+	// on this node.
+	current, err := commons.CurrentWgPeers()
+	if err != nil {
+		roslog.E("Could not read the current WireGuard peers, applying without removals", err)
+	}
+
+	plan := commons.PlanPeerConvergence(current, desired)
+
+	for _, pubKey := range plan.Remove {
+		if err := commons.RemoveWgPeer(pubKey); err != nil {
+			roslog.E("Could not remove VPN peer", err, "pubKey", pubKey)
+		}
+	}
+
+	for _, peer := range plan.Set {
+		if err := commons.SetWgPeer(peer.PubKey, peer.AllowedIP, peer.EndpointIP); err != nil {
 			roslog.E("Skipping VPN peer", err, "pubKey", peer.PubKey)
 		}
 	}

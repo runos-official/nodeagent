@@ -42,8 +42,23 @@ func validateIP(ip string) error {
 // vector for `wg set wg0 peer ...`. Each value becomes a SEPARATE exec argument
 // (no shell, no string interpolation), so peer fields can never be interpreted
 // as shell metacharacters. pubKey must be a canonical WireGuard base64 key and
-// both allowedIP and endpointIP must parse as IP addresses; anything else is
-// rejected with an error.
+// allowedIP must parse as an IP address; anything else is rejected with an error.
+//
+// THE ENDPOINT IS OPTIONAL (goal 27, vpn-peer-protocol). An empty endpointIP means
+// "identity only": the peer's key and allowed IP are configured and no endpoint is
+// set at all.
+//
+// That is the whole point rather than a leniency. A node behind NAT with no inbound
+// path has no endpoint anyone can dial, and requiring one meant such a peer was
+// omitted from the peer set ENTIRELY, key included. The receiving node then had
+// never heard of it, so it rejected that node's opening packet instead of
+// authenticating it. Distributing the key with no endpoint inverts it: the NAT'd
+// node dials out, the far side recognises the key, and WireGuard itself learns the
+// endpoint from the authenticated traffic. The keepalive below is what then holds
+// the NAT mapping open.
+//
+// An empty endpoint is therefore NOT a validation hole: a non-empty one is still
+// checked exactly as before, so nothing untrusted reaches the command line either way.
 func WgSetPeerArgs(pubKey, allowedIP, endpointIP string) ([]string, error) {
 	if err := validateWgPubKey(pubKey); err != nil {
 		return nil, err
@@ -51,17 +66,21 @@ func WgSetPeerArgs(pubKey, allowedIP, endpointIP string) ([]string, error) {
 	if err := validateIP(allowedIP); err != nil {
 		return nil, fmt.Errorf("invalid allowed-ips: %w", err)
 	}
-	if err := validateIP(endpointIP); err != nil {
-		return nil, fmt.Errorf("invalid endpoint: %w", err)
-	}
 
-	return []string{
+	args := []string{
 		"set", "wg0",
 		"peer", pubKey,
 		"allowed-ips", allowedIP + "/32",
-		"endpoint", endpointIP + ":" + wgListenPort,
-		"persistent-keepalive", wgKeepalive,
-	}, nil
+	}
+
+	if endpointIP != "" {
+		if err := validateIP(endpointIP); err != nil {
+			return nil, fmt.Errorf("invalid endpoint: %w", err)
+		}
+		args = append(args, "endpoint", endpointIP+":"+wgListenPort)
+	}
+
+	return append(args, "persistent-keepalive", wgKeepalive), nil
 }
 
 // SetWgPeer validates the peer fields and configures the WireGuard peer by

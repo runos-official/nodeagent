@@ -101,3 +101,56 @@ func TestValidateWgPubKey(t *testing.T) {
 		t.Fatal("expected invalid pubkey to be rejected")
 	}
 }
+
+// Goal 27, vpn-peer-protocol. An endpointless peer is IDENTITY ONLY: key and allowed IP, no
+// endpoint. It exists because a node behind NAT with no inbound path has no endpoint anyone can
+// dial, and requiring one meant such a peer was omitted from the peer set entirely, key included.
+// The far side had then never heard of it and rejected its opening packet instead of
+// authenticating it and learning where it came from.
+func TestWgSetPeerArgs_EndpointlessPeerIsIdentityOnly(t *testing.T) {
+	args, err := WgSetPeerArgs(validPubKey, "10.0.0.2", "")
+	if err != nil {
+		t.Fatalf("an endpointless peer must be accepted, got error: %v", err)
+	}
+	want := []string{
+		"set", "wg0",
+		"peer", validPubKey,
+		"allowed-ips", "10.0.0.2/32",
+		"persistent-keepalive", "5",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("WgSetPeerArgs() =\n  %v\nwant\n  %v", args, want)
+	}
+
+	// No empty endpoint argument may be emitted. `wg set ... endpoint ""` is an error, and an
+	// endpoint argument with an empty value would also shift every later argument.
+	for _, a := range args {
+		if a == "endpoint" {
+			t.Fatal("an endpointless peer must not emit an endpoint argument at all")
+		}
+		if a == "" {
+			t.Fatal("no argument may be empty")
+		}
+	}
+}
+
+// The keepalive is what makes the endpointless design work: the NAT'd node dials out and holds
+// its mapping open, so the far side can answer. Losing it would leave the peer unreachable a
+// minute after it went quiet.
+func TestWgSetPeerArgs_EndpointlessPeerKeepsTheKeepalive(t *testing.T) {
+	args, _ := WgSetPeerArgs(validPubKey, "10.0.0.2", "")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "persistent-keepalive 5") {
+		t.Fatalf("keepalive missing from %v", args)
+	}
+}
+
+// Making the endpoint optional must not have made it unvalidated: a SUPPLIED endpoint is still
+// checked exactly as before, so nothing untrusted reaches the command line.
+func TestWgSetPeerArgs_StillRejectsASuppliedBadEndpoint(t *testing.T) {
+	for _, bad := range []string{"not-an-ip$(reboot)", "203.0.113.5 extra", "; rm -rf /"} {
+		if args, err := WgSetPeerArgs(validPubKey, "10.0.0.2", bad); err == nil {
+			t.Fatalf("endpoint %q must still be rejected, got args: %v", bad, args)
+		}
+	}
+}
