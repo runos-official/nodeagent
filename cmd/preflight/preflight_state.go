@@ -182,9 +182,9 @@ func stLinkExists(name string) bool {
 	return err == nil
 }
 
-// stForeignCNIPresent reports whether /etc/cni/net.d contains a CNI config that
-// is NOT Cilium (Cilium is what RunOS installs). A Cilium-only dir is not a
-// conflict. Ambiguity (unreadable dir) => false.
+// stForeignCNIPresent reports whether /etc/cni/net.d contains a CNI config RunOS
+// did not put there. A dir holding only RunOS's own plugins is not a conflict.
+// Ambiguity (unreadable dir) => false.
 func stForeignCNIPresent() bool {
 	entries, err := os.ReadDir("/etc/cni/net.d")
 	if err != nil {
@@ -198,7 +198,7 @@ func stForeignCNIPresent() bool {
 		if !strings.HasSuffix(name, ".conf") && !strings.HasSuffix(name, ".conflist") && !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		if strings.Contains(name, "cilium") {
+		if isRunosCNIName(name) {
 			continue
 		}
 		b, rerr := os.ReadFile(filepath.Join("/etc/cni/net.d", e.Name()))
@@ -207,7 +207,7 @@ func stForeignCNIPresent() bool {
 			// as foreign so we do not silently install over it.
 			return true
 		}
-		if strings.Contains(strings.ToLower(string(b)), "cilium") {
+		if isRunosCNIBody(string(b)) {
 			continue
 		}
 		return true
@@ -718,4 +718,37 @@ func stSortStrings(s []string) {
 			s[j-1], s[j] = s[j], s[j-1]
 		}
 	}
+}
+
+// runosCNIMarkers are the plugins RunOS itself installs. A config naming one of
+// them is this node's own state, not a leftover from a previous life.
+//
+// MULTUS IS ON THIS LIST DELIBERATELY (goal 27, W2). RunOS installs Multus when
+// VM networking is enabled, and Multus in auto mode writes 00-multus.conf by
+// embedding the existing default CNI config as its delegate. That embedded copy
+// normally mentions Cilium, so the file used to pass by accident, through a
+// substring in a file a third-party binary generates. If Multus ever changed
+// that format, a node that had VM networking would become UNINSTALLABLE: the
+// preflight would block on RunOS's own config, and the block is deliberately
+// earlier than the wipe that would have cleared it. Naming Multus outright
+// removes the dependency on what its generated file happens to contain.
+var runosCNIMarkers = []string{"cilium", "multus"}
+
+func isRunosCNIName(lowerName string) bool {
+	for _, m := range runosCNIMarkers {
+		if strings.Contains(lowerName, m) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRunosCNIBody(body string) bool {
+	lower := strings.ToLower(body)
+	for _, m := range runosCNIMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }
