@@ -11,13 +11,7 @@ import (
 	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/version"
-	"github.com/runos-official/nodeagent/vip"
 )
-
-// vipSelfDropThreshold is the number of consecutive heartbeat failures after
-// which we defensively drop the VIP from wg0. Prevents a partitioned node
-// from holding the VIP while Nodeward re-elects.
-const vipSelfDropThreshold = 2
 
 // NodeAgentHeartbeat sends a single heartbeat to Nodeward with the node's
 // current role, status and version, and returns any send/decode error.
@@ -137,11 +131,6 @@ func StartNodeAgentHeartbeatManager(ctx context.Context) chan struct{} {
 				if err := NodeAgentHeartbeat(); err != nil {
 					consecutiveFailures++
 					roslog.E("Heartbeat error", err, "consecutive_failures", consecutiveFailures)
-					if consecutiveFailures >= vipSelfDropThreshold {
-						if dropErr := vip.ForceDrop(); dropErr != nil {
-							roslog.E("VIP self-drop failed", dropErr, "consecutive_failures", consecutiveFailures)
-						}
-					}
 					if consecutiveFailures >= maxConsecutiveFailures {
 						roslog.W("Max consecutive heartbeat failures reached, triggering agent restart", nil, "failures", consecutiveFailures)
 						return

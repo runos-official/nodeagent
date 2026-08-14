@@ -9,6 +9,26 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## v1.8.0
 
+### Removed
+
+- **The cluster VIP is gone.** Nothing ever connected to it. The address was assigned to `wg0` on
+  an elected node and failed over carefully between nodes, and a search of every RunOS repo found
+  no consumer: conductor had no reference to it at all, and the place a cluster VIP would normally
+  be used, the Kubernetes API endpoint, is reached through DNS and an haproxy on every node
+  instead.
+
+  Keeping it was not free, which is what decided it. It was the only thing in the agent that
+  assumed a node's address begins `172.24`, and therefore the only reason changing a cluster's
+  address range required a fleet update first. It also carried a live defect: the VIP pinned host
+  `.254` while nodes are allocated `1..254` inclusive, so the 254th node in a cluster would have
+  taken its address. Removing the feature makes that defect cease to exist, and all 254 host
+  addresses are now genuinely usable.
+
+  Gone with it: the VIP package, the assign and release instruction handlers, the holder query on
+  connect, and the self-drop after repeated heartbeat failures. Nodeward answers "not the holder"
+  to any agent that still asks, so a node running an older agent releases the address by itself
+  rather than being left holding a stale one.
+
 ### Fixed
 
 - **Preflight stopped blocking installs on a network that was fine.** The egress check built its

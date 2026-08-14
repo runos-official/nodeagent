@@ -95,50 +95,6 @@ func TestHandleRemoveEtcdMember_BadBase64(t *testing.T) {
 	}
 }
 
-// TestHandleVipAssign_BadPayloadSuppressesAck verifies the VIP_ASSIGN contract:
-// a malformed payload must return (nil, nil) so the dispatcher suppresses the
-// ack and Nodeward hands off to the next candidate, rather than returning an
-// error response. The bad payload also short-circuits before any wg0 reconcile.
-func TestHandleVipAssign_BadPayloadSuppressesAck(t *testing.T) {
-	in := &pb.ToNodeAgent{Type: VipAssignRequestType, Tag: "t7", JsonB64: "not-base64-$$$"}
-	resp, err := HandleVipAssign(in)
-	if err != nil {
-		t.Fatalf("expected nil error (ack suppression), got %v", err)
-	}
-	if resp != nil {
-		t.Fatalf("expected nil response (suppress ack) on bad payload, got %+v", resp)
-	}
-}
-
-// TestHandleVipRelease_BadPayloadAcksFailure verifies the VIP_RELEASE contract:
-// unlike VIP_ASSIGN, a malformed payload still returns a (best-effort) ack with
-// ok=false, because Nodeward proceeds regardless after its short timeout.
-func TestHandleVipRelease_BadPayloadAcksFailure(t *testing.T) {
-	in := &pb.ToNodeAgent{Type: VipReleaseRequestType, Tag: "t8", JsonB64: "not-base64-$$$"}
-	resp, err := HandleVipRelease(in)
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if resp == nil {
-		t.Fatal("expected a best-effort ack response, got nil")
-	}
-	if resp.Type != VipReleaseResponseType {
-		t.Fatalf("expected response type %q, got %q", VipReleaseResponseType, resp.Type)
-	}
-
-	// The ack body must decode and report ok=false for the malformed input.
-	var ack struct {
-		Ok      bool   `json:"ok"`
-		Message string `json:"message"`
-	}
-	if err := commons.JSONB64Decode(resp.JsonB64, &ack); err != nil {
-		t.Fatalf("decoding ack payload: %v", err)
-	}
-	if ack.Ok {
-		t.Fatal("expected ok=false in ack for malformed payload")
-	}
-}
-
 // TestHandleRunKubectlCommand_BadJSON verifies the kubectl handler rejects a
 // payload that is not a JSON array of args at the decode boundary.
 func TestHandleRunKubectlCommand_BadJSON(t *testing.T) {

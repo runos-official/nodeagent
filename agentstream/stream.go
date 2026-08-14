@@ -270,12 +270,6 @@ func handleInstruction(instruction *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
 	case UpgradeNodeK8sRequestType:
 		response, err = HandleUpgradeNodeK8s(instruction)
 
-	case VipAssignRequestType:
-		response, err = HandleVipAssign(instruction)
-
-	case VipReleaseRequestType:
-		response, err = HandleVipRelease(instruction)
-
 	case RestartServiceRequestType:
 		response, err = HandleRestartService(instruction)
 

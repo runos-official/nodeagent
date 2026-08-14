@@ -18,7 +18,6 @@ import (
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/certificate"
 	syncUc "github.com/runos-official/nodeagent/uc/sync"
-	"github.com/runos-official/nodeagent/vip"
 
 	"time"
 
@@ -339,22 +338,6 @@ func runConnection(rootCtx context.Context) (shutdown bool) {
 
 	// Start the instruction stream handler.
 	streamDone := agentstream.StartInstructionStreamHandler(connCtx, stream)
-
-	// VIP startup reconcile: query Nodeward authoritatively and converge wg0
-	// before the heartbeat starts. The instruction stream must already be running
-	// so the response correlates. On failure we tear down this connection and
-	// reconnect rather than exiting the process.
-	if isHolder, gen, err := agentstream.QueryVipHolderStatus(); err != nil {
-		roslog.E("VIP startup query failed, will reconnect", err)
-		connCancel()
-		<-streamDone
-		return rootCtx.Err() != nil
-	} else if _, err := vip.Apply(isHolder, gen, false); err != nil {
-		roslog.E("VIP startup reconcile failed, will reconnect", err)
-		connCancel()
-		<-streamDone
-		return rootCtx.Err() != nil
-	}
 
 	// VPN peer self-heal: re-apply the WireGuard peer table on every (re)connect,
 	// before HAProxy starts (its Kubernetes API backends are the control-plane
