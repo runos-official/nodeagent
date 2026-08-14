@@ -78,6 +78,15 @@ func netHTTPClient(follow bool) *http.Client {
 		}).DialContext,
 		TLSHandshakeTimeout:   netDialTimeout,
 		ResponseHeaderTimeout: netHTTPTimeout,
+		// Goal 23 F28: setting DialContext switches OFF Go's automatic HTTP/2
+		// upgrade, so this client spoke HTTP/1.1 while every other tool on the
+		// box spoke HTTP/2. GitHub drops HTTP/1.1 from some hosts and returns an
+		// empty reply, which Go surfaces as `EOF`, so preflight BLOCKED installs
+		// on machines where `curl https://github.com/` succeeded five times out
+		// of five. Measured: with DialContext set and this flag off the probe
+		// negotiates HTTP/1.1; with it on, HTTP/2.0. The whole point of this
+		// client is to match real egress behaviour, and without this it does not.
+		ForceAttemptHTTP2: true,
 	}
 	c := &http.Client{Timeout: netHTTPTimeout, Transport: tr}
 	if !follow {
@@ -88,11 +97,40 @@ func netHTTPClient(follow bool) *http.Client {
 	return c
 }
 
+// netProbeAttempts is how many times a single endpoint is tried before it is
+// called unreachable. Goal 23 F28: one dropped connection used to BLOCK an
+// install outright. These hosts demonstrably drop connections intermittently,
+// so a verdict this severe must not rest on a single attempt.
+const netProbeAttempts = 3
+
+// netProbeRetryDelay spaces the retries. Deliberately short: preflight probes
+// eight endpoints and the operator is waiting on it.
+const netProbeRetryDelay = 750 * time.Millisecond
+
 // netProbeHTTPS does a GET to https://host+path and returns (statusCode, err).
 // A transport-level failure returns err != nil; otherwise the HTTP status is
 // returned and the caller decides reachability (any non-5xx = reachable).
+// Transport failures are retried; an HTTP response of any status is an answer
+// and returns immediately.
 func netProbeHTTPS(host, path string) (int, error) {
 	u := "https://" + host + path
+	var lastErr error
+	for attempt := 1; attempt <= netProbeAttempts; attempt++ {
+		if attempt > 1 {
+			time.Sleep(netProbeRetryDelay)
+		}
+		code, err := netProbeHTTPSOnce(u)
+		if err == nil {
+			return code, nil
+		}
+		lastErr = err
+	}
+	return 0, lastErr
+}
+
+// netProbeHTTPSOnce is a single attempt, split out so the retry loop above
+// stays readable.
+func netProbeHTTPSOnce(u string) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), netHTTPTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

@@ -9,6 +9,26 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## v1.8.0
 
+### Fixed
+
+- **Preflight stopped blocking installs on a network that was fine.** The egress check built its
+  own HTTP client, and setting `DialContext` on a Go transport switches OFF the automatic HTTP/2
+  upgrade, so preflight spoke HTTP/1.1 while every other tool on the box spoke HTTP/2. GitHub
+  drops HTTP/1.1 from some hosts and returns an empty reply, which Go surfaces as `EOF`, so the
+  check reported
+
+      BLOCKED [egress-endpoints]: Cannot reach required HTTPS endpoint(s) on 443:
+        - github.com (the node binary release): Get "https://github.com/": EOF
+
+  while `curl https://github.com/` on the same machine returned 200 five times out of five, and
+  the remediation text told the operator to open a firewall that was already open. The client now
+  sets `ForceAttemptHTTP2`, so it matches real egress behaviour, which is the only reason this
+  client exists.
+
+  A single dropped connection also used to block an install outright. These hosts demonstrably
+  drop connections intermittently, so a verdict that severe now takes three attempts before it is
+  believed. (Goal 23, F28.)
+
 ### Changed
 
 - **A node whose LAN collides with the pod or service range is now refused at join.** The
