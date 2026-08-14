@@ -7,6 +7,25 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## Unreleased
+
+### Fixed
+
+- **Multus is recognised as RunOS's own CNI plugin, rather than by luck.** The `existing-k8s`
+  preflight blocks an install when it finds a CNI config it does not recognise, and that block is
+  deliberately EARLIER than the wipe that would have cleared it. So a config RunOS put there
+  itself has to be recognised, or a node becomes uninstallable by its own leftovers.
+
+  Recognition depended on the word `cilium` appearing somewhere in the file. For Multus that was
+  luck: Multus in auto mode writes `00-multus.conf` by embedding the existing default CNI config
+  as its delegate, and that embedded copy normally mentions Cilium. A change in Multus's generated
+  format would have made every node that had VM networking uninstallable, and the failure would
+  present as a refusal to start rather than as anything resembling a bug.
+
+  Multus is now named outright, so recognition no longer depends on what a third-party binary
+  happens to write. A planted foreign CNI config is still foreign, which is the case the block
+  exists for.
+
 ## v1.8.0-rc.2
 
 ### Added
