@@ -7,6 +7,41 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.2
+
+### Added
+
+- **A peer may now have no endpoint.** Peer configuration required a valid endpoint IP and always
+  emitted `endpoint <ip>:51820`. A node behind NAT with no inbound path has no endpoint anyone can
+  dial, so such a peer was left out of the peer set ENTIRELY, its public key included. The far
+  side had therefore never heard of it, and rejected its opening packet instead of authenticating
+  it.
+
+  An empty endpoint now configures identity only: the key and allowed IP are applied and no
+  endpoint argument is emitted at all. The NAT'd node dials out, the far side recognises the key,
+  and WireGuard learns the endpoint from the authenticated traffic. The existing 5 second
+  keepalive is what then holds the NAT mapping open.
+
+  This is not a relaxation of validation. A supplied endpoint is still checked exactly as before,
+  so nothing untrusted reaches the command line either way.
+
+### Fixed
+
+- **The peer set now converges to exactly what was sent.** The update was purely additive: it
+  configured the peers it was given and removed nothing. Two consequences, both permanent and
+  both silent. A retired node stayed a peer, so a machine removed from the cluster kept a working
+  key. And a peer once given the wrong endpoint kept it forever, because there was no way to say
+  "no endpoint". A declaration you can toggle one way but not back is not a declaration.
+
+  Clearing an endpoint is done by removing the peer and adding it back, because WireGuard has no
+  command that unsets one: `wg set` can overwrite an endpoint, never remove it. A peer that is
+  already endpointless is left alone rather than churned, so a live session is not dropped for
+  nothing.
+
+  Failing to read the current peers plans NO removals. Treating "could not read" as "no peers are
+  configured" would tear down every working tunnel on the node, so the unknown case fails toward
+  leaving things alone.
+
 ## v1.8.0-rc.1
 
 ### Removed
