@@ -7,6 +7,16 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.10
+
+### Fixed
+
+- **`runos sync vpn` converges the peer ufw rules too.** rc.9 added the peered-cluster ufw rules on
+  the streamed peer set only, so the manual repair tool fixed the routes but not the firewall.
+  Measured on a Hetzner node with ufw active, peered to another cluster: hand-deleting the rule cut
+  the far cluster's DNS ("no servers could be reached"); `runos sync vpn` re-added the rule and the
+  query answered again; revoking the peering removed the peer and the rule inside the push.
+
 ## v1.8.0-rc.9
 
 ### Changed
@@ -24,9 +34,8 @@ as the GitHub release notes, so every released version needs a section here.
   The install-time ufw rules allow this node's own range and the legacy `172.24.0.0/16` only, so a
   peered cluster's globally-unique range was dropped even with the kernel route in place. On every
   `SET_VPN_PEERS` the agent now converges `ufw allow` rules for the /24 of each out-of-prefix peer,
-  tagged with a marker comment and added and removed with the peering. Converged on BOTH sync paths
-  (the streamed peer set and `runos sync vpn`), a no-op when ufw is absent or inactive, and it never
-  touches an operator's own rules.
+  tagged with a marker comment and added and removed with the peering. A no-op when ufw is absent or
+  inactive, and it never touches an operator's own rules.
 
 ### Removed
 
