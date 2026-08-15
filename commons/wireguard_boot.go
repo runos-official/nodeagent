@@ -20,48 +20,86 @@ import (
 // its restart re-pulled Wants=wg-quick@wg0, and the tunnel came up ~105s after boot. Every reboot.
 //
 // THE FIX IS A FILE, and it lives in two places on purpose. Nodeward writes it at install for
-// new nodes (uc/prep/10_wg.go, WgQuickOverride). Nothing re-runs an install on a node that is
+// new nodes (uc/prep/10_wg.go, WgQuickUnit). Nothing re-runs an install on a node that is
 // already in the fleet, so the agent restores the SAME bytes on every start: a node installed
-// before the reset is repaired the next time its agent runs, and a hand-edited file goes back to
-// what RunOS declared. Byte-identical content on both sides is what keeps this from becoming two
-// writers with two opinions.
+// before the unit existed is repaired the next time its agent runs, and a hand-edited file goes
+// back to what RunOS declared. Byte-identical content on both sides is what keeps this from
+// becoming two writers with two opinions.
 //
-// The reset (`After=` then `After=network-online.target`) is what removes nss-lookup.target from
-// the ordering. wg0 never needed name resolution: every endpoint RunOS distributes is an address.
+// The file is the stock template with nss-lookup.target removed, as an INSTANCE unit that
+// shadows the template. wg0 never needed name resolution: every endpoint RunOS distributes is an
+// address.
 
-// WgQuickOverridePath is the drop-in nodeward writes at install.
-const WgQuickOverridePath = "/etc/systemd/system/wg-quick@wg0.service.d/override.conf"
+// WgQuickUnitPath is the INSTANCE unit for wg0. A real file here shadows the stock template
+// `wg-quick@.service` for this one instance, which is the only way to take a dependency OUT of
+// it: systemd lets a drop-in add to After=/Wants= but never reset them ("dependencies can only be
+// added in drop-ins", systemd.unit(5)). Measured 2026-08-15: a drop-in with `After=` then
+// `After=network-online.target` still loaded with nss-lookup.target in the ordering.
+const WgQuickUnitPath = "/etc/systemd/system/wg-quick@wg0.service"
 
-// WgQuickOverride must stay byte-identical to nodeward's uc/prep WgQuickOverride.
-const WgQuickOverride = `[Unit]
-# RunOS managed. Do not edit: the node agent restores this file.
-# The ordering is RESET here, not appended. The stock unit is After=nss-lookup.target, which
-# dnsmasq provides, and RunOS orders dnsmasq after wg0; keeping the stock ordering is a cycle
-# that systemd breaks by not starting wg0 at boot.
-After=
+// wgQuickDropInDir is the drop-in an install before the instance unit wrote. It only appended
+// network-online.target, which the unit declares, so it is removed rather than left to confuse.
+const wgQuickDropInDir = "/etc/systemd/system/wg-quick@wg0.service.d"
+
+// WgQuickUnit must stay byte-identical to nodeward's uc/prep WgQuickUnit (nodeward's test suite
+// checks the two when the repos are checked out side by side).
+const WgQuickUnit = `# RunOS managed. Do not edit: the node agent restores this file.
+# This instance unit shadows the stock wg-quick@.service template for wg0. It is the stock unit
+# with nss-lookup.target REMOVED from the ordering: dnsmasq provides that target and RunOS orders
+# dnsmasq after wg0, so keeping it is a cycle that systemd breaks by not starting wg0 at boot.
+[Unit]
+Description=WireGuard via wg-quick(8) for wg0 (RunOS)
 After=network-online.target
-Wants=
 Wants=network-online.target
+PartOf=wg-quick.target
+Documentation=man:wg-quick(8)
+Documentation=man:wg(8)
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/wg-quick up wg0
+ExecStop=/usr/bin/wg-quick down wg0
+ExecReload=/bin/bash -c 'exec /usr/bin/wg syncconf wg0 <(exec /usr/bin/wg-quick strip wg0)'
+Environment=WG_ENDPOINT_RESOLUTION_RETRIES=infinity
+
+[Install]
+WantedBy=multi-user.target
 `
 
-// EnsureWg0BootOrder writes the override when the file on disk differs, then reloads systemd.
+// EnsureWg0BootOrder writes the instance unit when the file on disk differs, drops the old
+// drop-in, then reloads systemd.
 //
 // It touches nothing when the file already matches, so a healthy node pays one read per agent
-// start. A missing directory means the node has no wg0 unit yet (mid-install), and the install
-// will write the file itself; nothing is created here. Failures are logged and never fatal:
+// start. A node with no wg-quick template installed has no wg0 yet (mid-install), and the
+// install writes the file itself; nothing is created here. Failures are logged and never fatal:
 // this repairs the NEXT boot, and the agent has work to do on this one.
 func EnsureWg0BootOrder() {
-	changed, err := ensureFileContent(WgQuickOverridePath, WgQuickOverride)
+	if _, err := os.Stat("/usr/lib/systemd/system/wg-quick@.service"); err != nil {
+		if _, err2 := os.Stat("/lib/systemd/system/wg-quick@.service"); err2 != nil {
+			// wireguard-tools is not installed yet; the install writes the unit.
+			return
+		}
+	}
+	changed, err := ensureFileContent(WgQuickUnitPath, WgQuickUnit)
 	if err != nil {
-		roslog.W("Could not check the wg0 boot ordering override", err, "path", WgQuickOverridePath)
+		roslog.W("Could not check the wg0 unit", err, "path", WgQuickUnitPath)
 		return
 	}
-	if !changed {
+	dropInRemoved := false
+	if _, err := os.Stat(wgQuickDropInDir); err == nil {
+		if err := os.RemoveAll(wgQuickDropInDir); err != nil {
+			roslog.W("Could not remove the old wg0 drop-in", err, "path", wgQuickDropInDir)
+		} else {
+			dropInRemoved = true
+		}
+	}
+	if !changed && !dropInRemoved {
 		return
 	}
-	roslog.I("Restored the wg0 boot ordering override; wg0 will start at the next boot without waiting on dnsmasq", "path", WgQuickOverridePath)
+	roslog.I("Restored the wg0 unit; wg0 will start at the next boot without waiting on dnsmasq", "path", WgQuickUnitPath, "dropInRemoved", dropInRemoved)
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
-		roslog.W("systemctl daemon-reload failed after restoring the wg0 override; it applies at the next reload", err, "output", string(out))
+		roslog.W("systemctl daemon-reload failed after restoring the wg0 unit; it applies at the next reload", err, "output", string(out))
 	}
 }
 

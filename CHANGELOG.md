@@ -7,7 +7,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
-## v1.8.0-rc.7
+## v1.8.0-rc.8
 
 ### Fixed
 
@@ -16,17 +16,24 @@ as the GitHub release notes, so every released version needs a section here.
   is an ordering cycle, and systemd breaks it by deleting wg0's start job: measured on a Hetzner
   Ubuntu 24.04 node, "dnsmasq.service: Job wg-quick@wg0.service/start deleted to break ordering
   cycle", so a rebooted node ran about 105 seconds with no overlay until dnsmasq's start-pre timed
-  out and its restart re-pulled the tunnel. The agent now restores nodeward's
-  `wg-quick@wg0.service.d/override.conf` on every start, byte-identical to what a fresh install
-  writes, which RESETS the stock ordering (`After=` then `After=network-online.target`) so wg0
-  waits only for the network. One read on a healthy node; a rewrite plus `daemon-reload` on a node
-  installed before the reset. wg0 never needed name resolution: every endpoint RunOS distributes is
-  an address.
+  out and its restart re-pulled the tunnel. The agent now restores nodeward's INSTANCE unit
+  `/etc/systemd/system/wg-quick@wg0.service` on every start, byte-identical to what a fresh
+  install writes: the stock template with nss-lookup.target removed, shadowing the template for
+  wg0. A drop-in cannot do this, because systemd lets a drop-in add dependencies but never remove
+  them (rc.7 tried that and it did not take, which is why rc.7 was never advertised beyond the
+  minutes it took to measure). The old drop-in is removed with it. One read on a healthy node; a
+  write plus `daemon-reload` on a node installed before the unit. wg0 never needed name
+  resolution: every endpoint RunOS distributes is an address.
 
 ### Changed
 
 - The "could not read wg0's own prefixes" message during install is now informational. The peer
   set can arrive before wg0 exists once per install; the next peer set converges the routes.
+
+## v1.8.0-rc.7
+
+Superseded by rc.8 within the hour: its drop-in reset of `After=` did not take effect, because
+systemd does not let a drop-in remove a dependency. Do not advertise.
 
 ## v1.8.0-rc.6
 
