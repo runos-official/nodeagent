@@ -7,6 +7,32 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.9
+
+### Changed
+
+- **The stale wg1 user VPN range is no longer guarded at join** (goal 27, wg1-user-vpn-range-preflight).
+  Preflight refused a host whose LAN overlapped the hardcoded `172.24.200.0/21`, which is stale now
+  that user VPN addressing is account-scoped and pooled in conductor. The check moved to the control
+  plane the same way the wg0 `172.24.0.0/16` check did: conductor refuses a VPN-server install onto a
+  node whose reported networks overlap the account's real user VPN range. A machine on
+  `172.24.200.0/24` now registers without a false refusal. The two Kubernetes ranges stay guarded.
+
+### Fixed
+
+- **A node with ufw active no longer drops a peered cluster's traffic** (goal 27, peering-loose-ends).
+  The install-time ufw rules allow this node's own range and the legacy `172.24.0.0/16` only, so a
+  peered cluster's globally-unique range was dropped even with the kernel route in place. On every
+  `SET_VPN_PEERS` the agent now converges `ufw allow` rules for the /24 of each out-of-prefix peer,
+  tagged with a marker comment and added and removed with the peering. A no-op when ufw is absent or
+  inactive, and it never touches an operator's own rules.
+
+### Removed
+
+- **The stale `node_agent_installer.sh` and `node_agent_updater.sh` copies.** Nothing read them; the
+  scripts a node actually runs are `templates/install.sh` and `templates/update.sh` in the templates
+  repo, and the in-repo copies had drifted from them in both directions.
+
 ## v1.8.0-rc.8
 
 ### Fixed
