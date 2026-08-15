@@ -83,3 +83,22 @@ func TestParsePeerRoutesReadsIpJsonOutput(t *testing.T) {
 		t.Fatalf("empty output must parse to no routes, got %v %v", got, err)
 	}
 }
+
+// A peer that hosts VMs contributes their pool /32s to the route plan too (goal 27,
+// vm-group-range-routing); an extra inside this node's own range needs no route.
+func TestPlanPeerRoutesIncludesExtraAllowedIPs(t *testing.T) {
+	_, own, _ := net.ParseCIDR("10.128.252.0/24")
+	desired := []WgPeer{{
+		PubKey:          "k",
+		AllowedIP:       "172.24.32.1",
+		ExtraAllowedIPs: []string{"10.77.5.2", "10.128.252.9"},
+	}}
+	add, remove := PlanPeerRoutes([]*net.IPNet{own}, desired, nil)
+	if len(remove) != 0 {
+		t.Fatalf("remove = %v", remove)
+	}
+	want := []string{"10.77.5.2", "172.24.32.1"}
+	if len(add) != 2 || add[0] != want[0] || add[1] != want[1] {
+		t.Fatalf("add = %v want %v (extras routed, own-range extra skipped)", add, want)
+	}
+}

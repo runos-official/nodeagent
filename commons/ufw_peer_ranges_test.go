@@ -71,3 +71,14 @@ func TestPlanUfwPeerRanges(t *testing.T) {
 		t.Fatalf("remove = %v", remove)
 	}
 }
+
+// A far VM group's /24 needs its own ufw allow rule exactly like the far cluster's /24 does.
+func TestDesiredPeerRangesIncludesExtraAllowedIPRanges(t *testing.T) {
+	own := []*net.IPNet{mustPrefix(t, "10.128.252.0/24")}
+	peers := []WgPeer{{PubKey: "k", AllowedIP: "172.24.32.1", ExtraAllowedIPs: []string{"10.77.5.2", "10.77.5.9"}}}
+	got := desiredPeerRanges(own, peers)
+	want := []string{"10.77.5.0/24", "172.24.32.0/24"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}

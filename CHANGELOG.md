@@ -7,6 +7,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.11
+
+### Added
+
+- **Peers can carry the VMs they host** (goal 27, vm-group-range-routing). A peer entry may now
+  include `extraAllowedIps`: the pool addresses of the virtual machines that node currently hosts.
+  The agent folds each into the peer's WireGuard `allowed-ips`, adds a kernel route per address
+  (protocol 201, converged exactly like the peer routes), and allows the VM group's /24 through
+  ufw beside the peered cluster ranges. Every extra address is validated like the primary: peer
+  fields are untrusted input to a root exec. An agent older than this release ignores the field;
+  its own mesh is intact and only the VMs behind the peer are out of its reach.
+
 ## v1.8.0-rc.10
 
 ### Fixed

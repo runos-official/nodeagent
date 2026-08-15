@@ -49,14 +49,18 @@ const wgInterface = "wg0"
 func PlanPeerRoutes(ownPrefixes []*net.IPNet, desired []WgPeer, current []string) (add []string, remove []string) {
 	want := make(map[string]bool)
 	for _, p := range desired {
-		ip := net.ParseIP(p.AllowedIP)
-		if ip == nil || ip.To4() == nil {
-			continue
+		// The peer's own address plus the VM pool addresses it hosts (goal 27,
+		// vm-group-range-routing): every out-of-prefix /32 the tunnel must carry gets a route.
+		for _, addr := range append([]string{p.AllowedIP}, p.ExtraAllowedIPs...) {
+			ip := net.ParseIP(addr)
+			if ip == nil || ip.To4() == nil {
+				continue
+			}
+			if insideAny(ip, ownPrefixes) {
+				continue
+			}
+			want[ip.String()] = true
 		}
-		if insideAny(ip, ownPrefixes) {
-			continue
-		}
-		want[ip.String()] = true
 	}
 
 	have := make(map[string]bool, len(current))

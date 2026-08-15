@@ -26,9 +26,10 @@ func setPeers(response *pb.ManualSyncResponse) int {
 	desired := make([]commons.WgPeer, 0, len(response.GetPeers()))
 	for _, peer := range response.GetPeers() {
 		desired = append(desired, commons.WgPeer{
-			PubKey:     peer.PubKey,
-			AllowedIP:  peer.Ip,
-			EndpointIP: peer.EndpointIp,
+			PubKey:          peer.PubKey,
+			AllowedIP:       peer.Ip,
+			EndpointIP:      peer.EndpointIp,
+			ExtraAllowedIPs: peer.GetExtraAllowedIps(),
 		})
 	}
 
@@ -47,7 +48,7 @@ func setPeers(response *pb.ManualSyncResponse) int {
 
 	skipped := 0
 	for _, peer := range plan.Set {
-		if err := commons.SetWgPeer(peer.PubKey, peer.AllowedIP, peer.EndpointIP); err != nil {
+		if err := commons.SetWgPeer(peer.PubKey, peer.AllowedIP, peer.EndpointIP, peer.ExtraAllowedIPs); err != nil {
 			roslog.E("Skipping VPN peer", err, "pubKey", peer.PubKey)
 			skipped++
 		}

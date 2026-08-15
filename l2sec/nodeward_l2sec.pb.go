@@ -226,12 +226,16 @@ func (x *InstallCommandList) GetCommands() []*InstallCommandList_InstallCommand 
 }
 
 type VpnPeer struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PubKey        string                 `protobuf:"bytes,10,opt,name=pubKey,proto3" json:"pubKey,omitempty"`
-	EndpointIp    string                 `protobuf:"bytes,15,opt,name=endpointIp,proto3" json:"endpointIp,omitempty"`
-	Ip            string                 `protobuf:"bytes,20,opt,name=ip,proto3" json:"ip,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PubKey     string                 `protobuf:"bytes,10,opt,name=pubKey,proto3" json:"pubKey,omitempty"`
+	EndpointIp string                 `protobuf:"bytes,15,opt,name=endpointIp,proto3" json:"endpointIp,omitempty"`
+	Ip         string                 `protobuf:"bytes,20,opt,name=ip,proto3" json:"ip,omitempty"`
+	// Pool addresses of the VMs this peer node hosts (goal 27, vm-group-range-routing): extra
+	// /32 allowed-ips the receiving agent adds beside `ip`, plus a kernel route each. An agent
+	// older than the field ignores it and simply cannot reach those VMs; its own mesh is intact.
+	ExtraAllowedIps []string `protobuf:"bytes,25,rep,name=extraAllowedIps,proto3" json:"extraAllowedIps,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *VpnPeer) Reset() {
@@ -283,6 +287,13 @@ func (x *VpnPeer) GetIp() string {
 		return x.Ip
 	}
 	return ""
+}
+
+func (x *VpnPeer) GetExtraAllowedIps() []string {
+	if x != nil {
+		return x.ExtraAllowedIps
+	}
+	return nil
 }
 
 type ManualSyncRequest struct {
@@ -1577,14 +1588,15 @@ const file_nodeward_l2sec_proto_rawDesc = "" +
 	"\x0eafterCommandId\x18\x0f \x01(\x05R\x0eafterCommandId\x12J\n" +
 	" afterCommandIdResultDoesNotMatch\x18\x14 \x01(\tR afterCommandIdResultDoesNotMatch\x12@\n" +
 	"\x1bafterCommandIdResultMatches\x18\x19 \x01(\tR\x1bafterCommandIdResultMatches\x12$\n" +
-	"\rignoreFailure\x18\x1e \x01(\bR\rignoreFailure\"Q\n" +
+	"\rignoreFailure\x18\x1e \x01(\bR\rignoreFailure\"{\n" +
 	"\aVpnPeer\x12\x16\n" +
 	"\x06pubKey\x18\n" +
 	" \x01(\tR\x06pubKey\x12\x1e\n" +
 	"\n" +
 	"endpointIp\x18\x0f \x01(\tR\n" +
 	"endpointIp\x12\x0e\n" +
-	"\x02ip\x18\x14 \x01(\tR\x02ip\"v\n" +
+	"\x02ip\x18\x14 \x01(\tR\x02ip\x12(\n" +
+	"\x0fextraAllowedIps\x18\x19 \x03(\tR\x0fextraAllowedIps\"v\n" +
 	"\x11ManualSyncRequest\x12?\n" +
 	"\bnodePeer\x18\n" +
 	" \x01(\v2#.runos.nodeward.proto.l2sec.VpnPeerR\bnodePeer\x12 \n" +
@@ -1683,7 +1695,7 @@ const file_nodeward_l2sec_proto_rawDesc = "" +
 	"AddNodelog\x12-.runos.nodeward.proto.l2sec.AddNodelogRequest\x1a..runos.nodeward.proto.l2sec.AddNodelogResponse\x12\x89\x01\n" +
 	"\x14GetControlPlaneNodes\x127.runos.nodeward.proto.l2sec.GetControlPlaneNodesRequest\x1a8.runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse\x12\xa1\x01\n" +
 	"\x1cUpdateNodeInstallationStatus\x12?.runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusRequest\x1a@.runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusResponse\x12\x8c\x01\n" +
-	"\x15RegenerateCertificate\x128.runos.nodeward.proto.l2sec.RegenerateCertificateRequest\x1a9.runos.nodeward.proto.l2sec.RegenerateCertificateResponseB!Z\x1fnodeward.runos.com/protos/l2secb\x06proto3"
+	"\x15RegenerateCertificate\x128.runos.nodeward.proto.l2sec.RegenerateCertificateRequest\x1a9.runos.nodeward.proto.l2sec.RegenerateCertificateResponseB+Z)github.com/runos-official/nodeagent/l2secb\x06proto3"
 
 var (
 	file_nodeward_l2sec_proto_rawDescOnce sync.Once

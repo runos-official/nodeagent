@@ -33,15 +33,19 @@ const ufwPeerRangeComment = "RunOS peered cluster range"
 func desiredPeerRanges(ownPrefixes []*net.IPNet, desired []WgPeer) []string {
 	set := make(map[string]bool)
 	for _, p := range desired {
-		ip := net.ParseIP(p.AllowedIP)
-		if ip == nil || ip.To4() == nil {
-			continue
+		// The peer's own address plus the VM pool addresses it hosts: a far VM group's /24 needs
+		// its own allow rule exactly like the far cluster's /24 does.
+		for _, addr := range append([]string{p.AllowedIP}, p.ExtraAllowedIPs...) {
+			ip := net.ParseIP(addr)
+			if ip == nil || ip.To4() == nil {
+				continue
+			}
+			if insideAny(ip, ownPrefixes) {
+				continue
+			}
+			masked := ip.Mask(net.CIDRMask(24, 32))
+			set[fmt.Sprintf("%s/24", masked.String())] = true
 		}
-		if insideAny(ip, ownPrefixes) {
-			continue
-		}
-		masked := ip.Mask(net.CIDRMask(24, 32))
-		set[fmt.Sprintf("%s/24", masked.String())] = true
 	}
 	ranges := make([]string, 0, len(set))
 	for r := range set {

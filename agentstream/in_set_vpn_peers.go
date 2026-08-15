@@ -31,6 +31,8 @@ type vpnPeer struct {
 	PubKey     string `json:"pubKey"`
 	EndpointIP string `json:"endpointIp"`
 	VpnIP      string `json:"vpnIp"`
+	// Pool addresses of the VMs the peer node hosts (goal 27, vm-group-range-routing).
+	ExtraAllowedIPs []string `json:"extraAllowedIps,omitempty"`
 }
 
 // HandleSetVpnPeers decodes a SET_VPN_PEERS instruction and configures the
@@ -93,9 +95,10 @@ func setVpnPeers(request vpnPeerRequest) {
 	desired := make([]commons.WgPeer, 0, len(request.Peers))
 	for _, peer := range request.Peers {
 		desired = append(desired, commons.WgPeer{
-			PubKey:     peer.PubKey,
-			AllowedIP:  peer.VpnIP,
-			EndpointIP: peer.EndpointIP,
+			PubKey:          peer.PubKey,
+			AllowedIP:       peer.VpnIP,
+			EndpointIP:      peer.EndpointIP,
+			ExtraAllowedIPs: peer.ExtraAllowedIPs,
 		})
 	}
 
@@ -116,7 +119,7 @@ func setVpnPeers(request vpnPeerRequest) {
 	}
 
 	for _, peer := range plan.Set {
-		if err := commons.SetWgPeer(peer.PubKey, peer.AllowedIP, peer.EndpointIP); err != nil {
+		if err := commons.SetWgPeer(peer.PubKey, peer.AllowedIP, peer.EndpointIP, peer.ExtraAllowedIPs); err != nil {
 			roslog.E("Skipping VPN peer", err, "pubKey", peer.PubKey)
 		}
 	}

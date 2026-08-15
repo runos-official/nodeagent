@@ -59,18 +59,28 @@ func validateIP(ip string) error {
 //
 // An empty endpoint is therefore NOT a validation hole: a non-empty one is still
 // checked exactly as before, so nothing untrusted reaches the command line either way.
-func WgSetPeerArgs(pubKey, allowedIP, endpointIP string) ([]string, error) {
+func WgSetPeerArgs(pubKey, allowedIP, endpointIP string, extraAllowedIPs []string) ([]string, error) {
 	if err := validateWgPubKey(pubKey); err != nil {
 		return nil, err
 	}
 	if err := validateIP(allowedIP); err != nil {
 		return nil, fmt.Errorf("invalid allowed-ips: %w", err)
 	}
+	// The extras are the pool addresses of the VMs the peer hosts (goal 27,
+	// vm-group-range-routing), each a /32 beside the node's own. Validated exactly like the
+	// primary: every field of a peer is untrusted input to a root exec.
+	allowed := allowedIP + "/32"
+	for _, extra := range extraAllowedIPs {
+		if err := validateIP(extra); err != nil {
+			return nil, fmt.Errorf("invalid extra allowed-ip: %w", err)
+		}
+		allowed += "," + extra + "/32"
+	}
 
 	args := []string{
 		"set", "wg0",
 		"peer", pubKey,
-		"allowed-ips", allowedIP + "/32",
+		"allowed-ips", allowed,
 	}
 
 	if endpointIP != "" {
@@ -87,14 +97,14 @@ func WgSetPeerArgs(pubKey, allowedIP, endpointIP string) ([]string, error) {
 // invoking `wg` directly (no shell), so untrusted peer fields cannot be used
 // for command injection. It returns an error if validation or the command
 // fails.
-func SetWgPeer(pubKey, allowedIP, endpointIP string) error {
-	args, err := WgSetPeerArgs(pubKey, allowedIP, endpointIP)
+func SetWgPeer(pubKey, allowedIP, endpointIP string, extraAllowedIPs []string) error {
+	args, err := WgSetPeerArgs(pubKey, allowedIP, endpointIP, extraAllowedIPs)
 	if err != nil {
 		roslog.E("Rejecting invalid WireGuard peer", err, "pubKey", pubKey, "allowedIp", allowedIP, "endpointIp", endpointIP)
 		return err
 	}
 
-	roslog.I("Setting WireGuard peer", "pubKey", pubKey, "allowedIp", allowedIP, "endpointIp", endpointIP)
+	roslog.I("Setting WireGuard peer", "pubKey", pubKey, "allowedIp", allowedIP, "endpointIp", endpointIP, "extraAllowedIps", len(extraAllowedIPs))
 	cmd := exec.Command("wg", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		roslog.E("wg set failed", err, "output", string(out))

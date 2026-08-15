@@ -24,6 +24,11 @@ type WgPeer struct {
 	PubKey     string
 	AllowedIP  string
 	EndpointIP string
+	// ExtraAllowedIPs are the pool addresses of the VMs the peer node hosts (goal 27,
+	// vm-group-range-routing): each becomes another /32 in the peer's allowed-ips and a kernel
+	// route. `wg set allowed-ips` REPLACES the list, so a dropped extra converges away on the
+	// next set with no separate removal step.
+	ExtraAllowedIPs []string
 }
 
 // PeerConvergencePlan is what to do to the interface to reach the desired set.
