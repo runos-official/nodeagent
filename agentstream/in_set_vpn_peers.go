@@ -120,6 +120,12 @@ func setVpnPeers(request vpnPeerRequest) {
 			roslog.E("Skipping VPN peer", err, "pubKey", peer.PubKey)
 		}
 	}
+
+	// KERNEL ROUTES FOR PEERS OUTSIDE THIS NODE'S OWN RANGE (goal 27, design-peering-mesh). A peer
+	// from a peered cluster is accepted by WireGuard's allowed-ips but the kernel has no route to
+	// it, so its traffic would leave by the default gateway. Converged to exactly the desired set,
+	// like the peers themselves; a no-op on a cluster with no peerings.
+	commons.ApplyPeerRoutes(desired)
 }
 
 func getWgPubKey() string {

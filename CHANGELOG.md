@@ -7,6 +7,27 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.6
+
+### Added
+
+- **Kernel routes for peers outside this node's own overlay range, so cluster peering can carry
+  traffic.** wg0 comes up with the cluster's own /24 as its only route, and `wg set` adds no
+  routes, so a peer from a PEERED cluster was accepted by WireGuard's allowed-ips and then
+  unreachable: the kernel sent its traffic out the default gateway while the tunnel looked up.
+  Every peer whose address is outside wg0's own prefixes now gets a /32 route on wg0, tagged with
+  its own routing-protocol number (201) so it can be listed and removed without touching anything
+  else, and the routes converge to exactly the peer set: a withdrawn peer loses its route. On a
+  cluster with no peerings this is a no-op. The control plane withholds cross-cluster peers from
+  any pair where either agent is below this version, because a route on one side alone is a
+  tunnel that sends and cannot receive.
+
+### Changed
+
+- **`runos sync vpn` now converges the peer set exactly, like the agent stream does.** It was
+  additive, so a node that fell back to manual sync kept retired peers and stale endpoints the
+  stream path had already cleared. Both paths now plan the same removals and the same routes.
+
 ## v1.8.0-rc.5
 
 ### Changed
