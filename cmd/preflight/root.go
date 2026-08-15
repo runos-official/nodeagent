@@ -28,6 +28,16 @@ var server string
 // probed against a default/derived host or skipped with a warning.
 var cdnURL string
 
+// clusterCIDR is the overlay range of the cluster this node is joining, passed by
+// the control plane via `runos preflight --cluster-cidr <cidr>`. The reserved
+// subnet check guards it instead of the legacy hardcoded 172.24.0.0/16.
+//
+// Empty is allowed and is the fallback path: see idReservedNetsFor, which
+// documents why it exists and what retires it. It is a FACT the control plane
+// supplies, not a security boundary; preflight runs on the joining machine, which
+// is already the operator's own, so a wrong value only mis-advises that operator.
+var clusterCIDR string
+
 var RootCmd = &cobra.Command{
 	Use:   "preflight",
 	Short: "Check if the system is ready for installation",
@@ -47,6 +57,8 @@ func init() {
 		"Nodeward host this node will register against (probed for reachability)")
 	RootCmd.PersistentFlags().StringVar(&cdnURL, "cdn", "",
 		"Base CDN URL the installer pulls artifacts from (probed for reachability)")
+	RootCmd.PersistentFlags().StringVar(&clusterCIDR, "cluster-cidr", "",
+		"Overlay range of the cluster this node is joining, checked for a clash with the host's own networks")
 }
 
 // checkRoot ensures we are running as the effective root user. Almost every

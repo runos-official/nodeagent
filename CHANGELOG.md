@@ -7,6 +7,30 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.4
+
+### Fixed
+
+- **The join-time clash check guards the range the cluster actually holds.** Preflight refuses a
+  node whose own LAN or routes collide with a range RunOS allocates from, because that collision
+  surfaces only AFTER the install, as duplicate routes that break the node mesh, the CNI or
+  service routing.
+
+  The guarded list named `172.24.0.0/16`, which was right while every cluster overlay came out of
+  that block. Ranges are drawn at random from the whole of RFC1918 since the address pool landed,
+  so the constant was wrong in both directions at once. It refused a host on `172.24.x`, which the
+  pool excludes and only legacy clusters use. And it could not refuse a host whose LAN is the
+  range the cluster actually got, which is the collision the check exists to prevent.
+
+  `runos preflight --cluster-cidr <cidr>` now takes the cluster's own range from the control
+  plane and guards that instead. It is strictly narrower: a legacy cluster passes its
+  `172.24.<octet>.0/24` and the rest of the /16, which belongs to other clusters, stops being
+  this node's problem.
+
+  Omitting the flag keeps the exact behaviour of every previous release, so a node that joins
+  today cannot start failing. The installer probes for the flag before passing it, so a cluster
+  pinned to an older agent is unaffected.
+
 ## v1.8.0-rc.3
 
 ### Fixed

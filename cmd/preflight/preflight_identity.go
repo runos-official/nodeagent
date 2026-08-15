@@ -604,10 +604,16 @@ type idReservedCIDR struct {
 // unguarded, and they are ranks 1 and 2 on the collision list.
 var idRunosReservedCIDRs = []idReservedCIDR{
 	{CIDR: "172.24.200.0/21", Label: "the wg1 user VPN range"},
-	{CIDR: "172.24.0.0/16", Label: "the wg0 node mesh"},
+	{CIDR: LegacyOverlayCIDR, Label: "the wg0 node mesh"},
 	{CIDR: "172.25.0.0/16", Label: "the Kubernetes pod range"},
 	{CIDR: "10.96.0.0/12", Label: "the Kubernetes service range"},
 }
+
+// LegacyOverlayCIDR is the block every cluster overlay came out of before ranges
+// became globally unique (goal 27, W8). Named rather than repeated, because
+// idReservedNetsFor has to recognise this exact entry to drop it when the control
+// plane supplies the cluster's real range.
+const LegacyOverlayCIDR = "172.24.0.0/16"
 
 // idReservedNet is a parsed idReservedCIDR.
 type idReservedNet struct {
@@ -625,6 +631,61 @@ func idReservedNets() []idReservedNet {
 			continue
 		}
 		nets = append(nets, idReservedNet{Net: n, CIDR: r.CIDR, Label: r.Label})
+	}
+	return nets
+}
+
+// idReservedNetsFor builds the guarded list for a node joining the cluster whose
+// overlay range is clusterCIDR, as passed by the control plane through
+// `runos preflight --cluster-cidr` (goal 27, design-peering-mesh item 5).
+//
+// WHY THE HARDCODED wg0 RANGE CANNOT STAY. Until W8 every cluster's overlay came
+// out of 172.24.0.0/16, so one constant guarded every cluster. Ranges are now
+// drawn at random from the whole of RFC1918 minus an exclusion list, which breaks
+// the constant in BOTH directions at once. It refuses a host on 172.24.x, which
+// the pool excludes and only legacy clusters use. And it cannot refuse a host
+// whose LAN is the range this cluster actually got, which is the collision the
+// check exists to prevent. Reserving the pool instead is not an option: that
+// means reserving all of RFC1918 and refusing every node with a private LAN.
+//
+// So the cluster's OWN range replaces the /16 when it is known. It is knowable at
+// join time because the node joins a NAMED cluster, and it is strictly narrower:
+// a legacy cluster passes its 172.24.<octet>.0/24 and the rest of the /16, which
+// belongs to other clusters, stops being this node's problem.
+//
+// COMPATIBILITY PATH. DELETE THE FALLBACK BRANCH WHEN no control plane still
+// omits the range. An older control plane, or any caller that runs
+// `runos preflight` by hand, passes nothing, and an unparseable value is treated
+// as nothing rather than being guessed at. Both fall back to the exact hardcoded
+// list this check used before, so a node that joins today cannot start failing.
+//
+// HOW TO CHECK it is safe to delete: every install path that shells out to
+// preflight has to pass --cluster-cidr. Today those are templates' install.sh
+// (rendered from nodeward's and conductor's join commands) and any operator
+// running the command by hand, which is the case that keeps this branch alive.
+//
+// THE wg1 USER VPN RANGE IS STILL HARDCODED and is stale in the same way: it
+// became account-scoped and pool-allocated in conductor (ensureUserVpnRange), so
+// 172.24.200.0/21 no longer describes it. It is left as it is because the range
+// lives in conductor and may not exist at join time, and because it over-refuses
+// a single /21 rather than mis-guarding a whole /16. That is its own piece of work.
+func idReservedNetsFor(clusterCIDR string) []idReservedNet {
+	_, clusterNet, err := net.ParseCIDR(strings.TrimSpace(clusterCIDR))
+	if err != nil || clusterNet == nil {
+		return idReservedNets()
+	}
+
+	// The cluster's /24 goes FIRST, because the list is first-match-wins and
+	// ordered most-specific-first: reported against a wider range that happens to
+	// contain it, the operator is sent to the wrong remedy.
+	nets := []idReservedNet{{Net: clusterNet, CIDR: clusterNet.String(), Label: "this cluster's wg0 node mesh"}}
+	for _, n := range idReservedNets() {
+		// The legacy /16 is what the supplied range replaces. Keeping both would
+		// re-introduce the over-refusal this whole change exists to remove.
+		if n.CIDR == LegacyOverlayCIDR {
+			continue
+		}
+		nets = append(nets, n)
 	}
 	return nets
 }
@@ -651,7 +712,7 @@ type idRouteEntry struct {
 // asymmetric routing that silently breaks the node mesh, the CNI or service
 // routing once RunOS brings its own addresses up. Purely local, no network.
 func checkReservedSubnetOverlap() error {
-	nets := idReservedNets()
+	nets := idReservedNetsFor(clusterCIDR)
 	if len(nets) == 0 {
 		return nil
 	}

@@ -92,6 +92,77 @@ func TestReservedConflictsAllowsASupernetLan(t *testing.T) {
 	}
 }
 
+// A cluster's overlay range is drawn from the whole of RFC1918 since goal 27 W8,
+// so a check that names 172.24.0.0/16 guards a range the cluster does not use and
+// misses the range it does. The control plane passes the real one at join time.
+//
+// This is the OVER-REFUSAL half: a host on 172.24.x collides with nothing when its
+// cluster sits on 10.223.80.0/24, and refusing it turns a working machine away.
+func TestReservedNetsForClusterStopsRefusingTheLegacyRange(t *testing.T) {
+	nets := idReservedNetsFor("10.223.80.0/24")
+	addrs := []idAddrEntry{addrEntry("eno1", "172.24.9.1", 24)}
+
+	if got := idReservedConflicts(addrs, nil, nets); len(got) != 0 {
+		t.Errorf("conflicts = %v, want none: 172.24.9.1 does not collide with a cluster on 10.223.80.0/24", got)
+	}
+}
+
+// The UNDER-PROTECTION half, and the collision the check exists to prevent. The
+// host's LAN is the cluster's own overlay range, so wg0 addresses would duplicate
+// LAN addresses once the node is up. The hardcoded list could never catch this,
+// because the range is not known until the cluster is created.
+func TestReservedNetsForClusterCatchesTheRealCollision(t *testing.T) {
+	nets := idReservedNetsFor("10.223.80.0/24")
+	addrs := []idAddrEntry{addrEntry("eno1", "10.223.80.5", 24)}
+
+	got := idReservedConflicts(addrs, nil, nets)
+	if len(got) != 1 {
+		t.Fatalf("conflicts = %v, want exactly one", got)
+	}
+	if !strings.Contains(got[0], "10.223.80.0/24") {
+		t.Errorf("conflict %q does not name the cluster range", got[0])
+	}
+	if !strings.Contains(got[0], "eno1") {
+		t.Errorf("conflict %q does not name the interface", got[0])
+	}
+}
+
+// A legacy cluster still holds a 172.24.<octet>.0/24, and passing it narrows the
+// check rather than widening it: the node's OWN /24 is guarded, the rest of the
+// /16 belongs to other clusters and is not this node's business.
+func TestReservedNetsForClusterNarrowsALegacyRange(t *testing.T) {
+	nets := idReservedNetsFor("172.24.5.0/24")
+
+	own := []idAddrEntry{addrEntry("eno1", "172.24.5.9", 24)}
+	if got := idReservedConflicts(own, nil, nets); len(got) != 1 {
+		t.Errorf("conflicts = %v, want one for the cluster's own legacy range", got)
+	}
+
+	other := []idAddrEntry{addrEntry("eno1", "172.24.9.9", 24)}
+	if got := idReservedConflicts(other, nil, nets); len(got) != 0 {
+		t.Errorf("conflicts = %v, want none: 172.24.9.9 belongs to another cluster's range", got)
+	}
+}
+
+// THE COMPATIBILITY GUARANTEE, and the reason this fix is safe to ship on the
+// join path. An older control plane passes no range, and an unparseable one is
+// treated the same way. Both must behave EXACTLY as the check did before, so no
+// node that joins successfully today can start failing.
+func TestReservedNetsForFallsBackToTheHardcodedList(t *testing.T) {
+	for _, supplied := range []string{"", "not-a-cidr", "172.24.0.0/33"} {
+		nets := idReservedNetsFor(supplied)
+
+		if len(nets) != len(idRunosReservedCIDRs) {
+			t.Fatalf("supplied %q: got %d ranges, want the %d hardcoded ones", supplied, len(nets), len(idRunosReservedCIDRs))
+		}
+		for i, want := range idRunosReservedCIDRs {
+			if nets[i].CIDR != want.CIDR || nets[i].Label != want.Label {
+				t.Errorf("supplied %q: range %d = %s/%s, want %s/%s", supplied, i, nets[i].CIDR, nets[i].Label, want.CIDR, want.Label)
+			}
+		}
+	}
+}
+
 func addrEntry(ifname, local string, prefixLen int) idAddrEntry {
 	e := idAddrEntry{IfName: ifname}
 	e.AddrInfo = append(e.AddrInfo, struct {
