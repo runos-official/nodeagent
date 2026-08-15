@@ -24,8 +24,9 @@ as the GitHub release notes, so every released version needs a section here.
   The install-time ufw rules allow this node's own range and the legacy `172.24.0.0/16` only, so a
   peered cluster's globally-unique range was dropped even with the kernel route in place. On every
   `SET_VPN_PEERS` the agent now converges `ufw allow` rules for the /24 of each out-of-prefix peer,
-  tagged with a marker comment and added and removed with the peering. A no-op when ufw is absent or
-  inactive, and it never touches an operator's own rules.
+  tagged with a marker comment and added and removed with the peering. Converged on BOTH sync paths
+  (the streamed peer set and `runos sync vpn`), a no-op when ufw is absent or inactive, and it never
+  touches an operator's own rules.
 
 ### Removed
 

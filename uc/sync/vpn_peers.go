@@ -54,6 +54,9 @@ func setPeers(response *pb.ManualSyncResponse) int {
 	}
 
 	commons.ApplyPeerRoutes(desired)
+	// The ufw rules converge on BOTH sync paths, like the routes: `runos sync vpn` is the manual
+	// repair tool, and a repair that fixes the routes but not the firewall repairs half the fault.
+	commons.ApplyPeerUfwRules(desired)
 	return skipped
 }
 
