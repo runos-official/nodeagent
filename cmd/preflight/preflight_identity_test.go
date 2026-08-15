@@ -45,18 +45,16 @@ func TestReservedConflictsCoversPodAndServiceRanges(t *testing.T) {
 	}
 }
 
-// The wg1 user VPN range is a subset of the wg0 /16. Reporting the /16 for an
-// address that is really in the /21 sends the operator to the wrong remedy, so
-// the most specific range has to win.
-func TestReservedConflictsReportsTheMostSpecificRange(t *testing.T) {
+// The wg1 user VPN range (172.24.200.0/21) is NO LONGER guarded on the node (goal 27,
+// wg1-user-vpn-range-preflight). User VPN addressing is account-scoped and pooled, so the range
+// is a conductor fact; conductor refuses a wg1 install onto a node whose networks overlap the
+// account's real range. A machine on 172.24.200.0/24 must register without a preflight refusal.
+func TestReservedConflictsNoLongerGuardsTheWg1Range(t *testing.T) {
 	addrs := []idAddrEntry{addrEntry("eth0", "172.24.201.5", 24)}
 
 	got := idReservedConflicts(addrs, nil, idReservedNets())
-	if len(got) != 1 {
-		t.Fatalf("conflicts = %v, want exactly one", got)
-	}
-	if !strings.Contains(got[0], "172.24.200.0/21") {
-		t.Errorf("conflict %q should name the wg1 range, not the enclosing /16", got[0])
+	if len(got) != 0 {
+		t.Fatalf("conflicts = %v, want none: the wg1 range is not guarded on the node anymore", got)
 	}
 }
 

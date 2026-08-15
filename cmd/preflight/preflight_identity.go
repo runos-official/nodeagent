@@ -595,25 +595,26 @@ type idReservedCIDR struct {
 // with RunOS AFTER the install, which is a much worse place to find out than
 // at join time.
 //
-// Ordered MOST SPECIFIC FIRST. The first match wins, so a wg1 address must meet
-// the /21 before it meets the /16 that contains it; reported the other way
+// Ordered MOST SPECIFIC FIRST. The first match wins, so a more specific reserved
+// range is reported before the /16 that would contain it; reported the other way
 // round it sends the operator to the wrong remedy.
 //
 // The pod and service ranges were added for goal 27 W11 (defect E). They are
 // hardcoded on every cluster the same way the overlay parent is, they were
 // unguarded, and they are ranks 1 and 2 on the collision list.
 //
-// THE wg0 NODE MESH IS NO LONGER HERE, and its absence is deliberate (ADR-0003). This list can
-// only hold constants, and a cluster's overlay range stopped being one when ranges became
-// globally unique: the entry said 172.24.0.0/16, which no new cluster uses, and it could not
-// name the range the cluster actually holds. That check moved to REGISTRATION, where the control
-// plane knows the real range. The node reports its own networks there (uc/hostnet), and the
-// answer is both better and impossible to compute here.
+// TWO RANGES ARE NO LONGER HERE, and both absences are deliberate (ADR-0003). This list can only
+// hold constants. The wg0 node mesh entry (172.24.0.0/16) went first: a cluster's overlay range
+// stopped being a constant when ranges became globally unique, so the check moved to REGISTRATION
+// where the control plane knows the real range. The wg1 user VPN range (172.24.200.0/21) followed
+// (goal 27, wg1-user-vpn-range-preflight): user VPN addressing became account-scoped and pooled,
+// so the range is a conductor fact too, and conductor now refuses a wg1 install onto a node whose
+// reported networks overlap the account's real user VPN range. The node reports its own networks
+// at registration (uc/hostnet); the answer is both better and impossible to compute here.
 //
 // The two Kubernetes ranges stay, because they genuinely are identical on every cluster, so
 // checking them needs no facts from anywhere.
 var idRunosReservedCIDRs = []idReservedCIDR{
-	{CIDR: "172.24.200.0/21", Label: "the wg1 user VPN range"},
 	{CIDR: "172.25.0.0/16", Label: "the Kubernetes pod range"},
 	{CIDR: "10.96.0.0/12", Label: "the Kubernetes service range"},
 }

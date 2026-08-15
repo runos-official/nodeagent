@@ -126,6 +126,12 @@ func setVpnPeers(request vpnPeerRequest) {
 	// it, so its traffic would leave by the default gateway. Converged to exactly the desired set,
 	// like the peers themselves; a no-op on a cluster with no peerings.
 	commons.ApplyPeerRoutes(desired)
+
+	// ufw ALLOW RULES FOR THE PEERED-CLUSTER RANGES (goal 27, peering-loose-ends). The install-time
+	// rules allow this node's own range and legacy 172.24/16 only, so a node with ufw active drops
+	// a peered cluster's traffic even with the route in place. Converged with the peer set; a no-op
+	// when ufw is absent or inactive.
+	commons.ApplyPeerUfwRules(desired)
 }
 
 func getWgPubKey() string {
