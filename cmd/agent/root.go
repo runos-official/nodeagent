@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/runos-official/nodeagent/agentstream"
+	"github.com/runos-official/nodeagent/commons"
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/certificate"
@@ -80,6 +81,11 @@ agent verifies its mTLS certificate before starting.`,
 		} else if renewed {
 			roslog.I("Certificate was automatically renewed")
 		}
+
+		// Restore the wg0 boot ordering override before anything else, so this node's NEXT boot
+		// brings the tunnel up without waiting on dnsmasq (commons/wireguard_boot.go). One read
+		// on a healthy node; a rewrite plus daemon-reload on one installed before the reset.
+		commons.EnsureWg0BootOrder()
 
 		// VPN peer sync now runs inside runConnection on every (re)connect, plus a
 		// periodic self-heal ticker (see startVpnResyncTicker). Doing it here as a

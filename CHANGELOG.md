@@ -7,6 +7,27 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.7
+
+### Fixed
+
+- **wg0 comes up at boot again.** The stock `wg-quick@.service` is `After=nss-lookup.target`,
+  dnsmasq provides that target, and RunOS orders dnsmasq after wg0 (it binds wg0's address). That
+  is an ordering cycle, and systemd breaks it by deleting wg0's start job: measured on a Hetzner
+  Ubuntu 24.04 node, "dnsmasq.service: Job wg-quick@wg0.service/start deleted to break ordering
+  cycle", so a rebooted node ran about 105 seconds with no overlay until dnsmasq's start-pre timed
+  out and its restart re-pulled the tunnel. The agent now restores nodeward's
+  `wg-quick@wg0.service.d/override.conf` on every start, byte-identical to what a fresh install
+  writes, which RESETS the stock ordering (`After=` then `After=network-online.target`) so wg0
+  waits only for the network. One read on a healthy node; a rewrite plus `daemon-reload` on a node
+  installed before the reset. wg0 never needed name resolution: every endpoint RunOS distributes is
+  an address.
+
+### Changed
+
+- The "could not read wg0's own prefixes" message during install is now informational. The peer
+  set can arrive before wg0 exists once per install; the next peer set converges the routes.
+
 ## v1.8.0-rc.6
 
 ### Added

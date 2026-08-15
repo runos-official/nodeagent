@@ -165,7 +165,9 @@ func CurrentPeerRoutes() ([]string, error) {
 func ApplyPeerRoutes(desired []WgPeer) {
 	prefixes, err := Wg0Prefixes()
 	if err != nil {
-		roslog.E("Could not read wg0's own prefixes; peer routes not converged this pass", err)
+		// Mid-install the peer set can arrive before wg0 exists. That is expected once per node,
+		// not a fault: the next peer set converges the routes. Said at info level for that reason.
+		roslog.I("wg0 is not up yet; peer routes converge with the next peer set", "reason", err.Error())
 		return
 	}
 	current, err := CurrentPeerRoutes()
