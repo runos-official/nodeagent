@@ -7,6 +7,34 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.5
+
+### Changed
+
+- **The join-time clash check moved to the control plane, and the range is now chosen to avoid the
+  machine.** `runos preflight --cluster-cidr`, added one release ago in v1.8.0-rc.4, is REMOVED. It
+  was the wrong shape: it carried a fact from the authority through the install command, and a
+  machine checking itself can only ever refuse.
+
+  The node now reports the networks it already has (`uc/hostnet`: every interface address and route
+  destination, excluding RunOS's own wg0, Cilium and CNI links) as part of registering. The control
+  plane does the rest. For a cluster's FIRST node those networks decide which overlay range is
+  handed out, so the first machine in a cluster can no longer collide with its own cluster at all.
+  For a later node they are compared against the range the cluster already holds, and a collision
+  refuses the registration before anything is installed. See ADR-0003.
+
+  RunOS's own interfaces are excluded deliberately. wg0 holds an address inside the cluster's
+  overlay range, so reporting it would make every REINSTALL of an existing node look like a
+  collision with its own cluster.
+
+  Preflight keeps the two ranges that really are identical on every cluster, the Kubernetes pod
+  range `172.25.0.0/16` and service range `10.96.0.0/12`, because checking those needs no facts
+  from anywhere. It no longer guards `172.24.0.0/16`, which no cluster created since the address
+  pool landed has used.
+
+  An older agent sends no networks, and the control plane then chooses a range blind, exactly as
+  before. Nothing that joins today stops joining.
+
 ## v1.8.0-rc.4
 
 ### Fixed

@@ -11,6 +11,7 @@ import (
 	"github.com/runos-official/nodeagent/config"
 	pb "github.com/runos-official/nodeagent/l1sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/hostnet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -28,11 +29,21 @@ func RegisterNode(token, aid, machineId, server string) error {
 	defer cancel()
 	defer conn.Close()
 
+	// The machine's own networks travel with the registration (ADR-0003). For a cluster's FIRST
+	// node the control plane picks an overlay range that AVOIDS them, which is the only moment a
+	// collision can be prevented rather than reported. For a later node they are compared against
+	// the range the cluster already holds, and a collision refuses the registration.
+	//
+	// Best effort: a machine that cannot enumerate its own interfaces sends fewer entries, or
+	// none, and registration proceeds exactly as it did before this field existed.
+	hostCidrs := hostnet.Collect()
+
 	request := &pb.NodeRegistrationRequest{
 		Token:     token,
 		Aid:       aid,
 		MachineId: machineId,
 		Os:        commons.GetOSInfo(),
+		HostCidrs: hostCidrs,
 	}
 	r, err := c.Register(ctx, request)
 	if err != nil {

@@ -22,11 +22,22 @@ const (
 )
 
 type NodeRegistrationRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MachineId     string                 `protobuf:"bytes,25,opt,name=machineId,proto3" json:"machineId,omitempty"`
-	Aid           string                 `protobuf:"bytes,30,opt,name=aid,proto3" json:"aid,omitempty"`
-	Token         string                 `protobuf:"bytes,35,opt,name=token,proto3" json:"token,omitempty"`
-	Os            string                 `protobuf:"bytes,40,opt,name=os,proto3" json:"os,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	MachineId string                 `protobuf:"bytes,25,opt,name=machineId,proto3" json:"machineId,omitempty"`
+	Aid       string                 `protobuf:"bytes,30,opt,name=aid,proto3" json:"aid,omitempty"`
+	Token     string                 `protobuf:"bytes,35,opt,name=token,proto3" json:"token,omitempty"`
+	Os        string                 `protobuf:"bytes,40,opt,name=os,proto3" json:"os,omitempty"`
+	// The networks this machine already has: the CIDR of every interface address and of every
+	// route it holds, as the node itself sees them (ADR-0003).
+	//
+	// Nodeward avoids these when it claims the cluster's overlay range for the cluster's FIRST
+	// node, which is the only moment a collision can be prevented rather than reported. For a
+	// later node they are compared against the range the cluster already holds, and a collision
+	// refuses the registration.
+	//
+	// OPTIONAL. An agent older than v1.8.0-rc.5 sends none, and nodeward then chooses a range
+	// blind, exactly as it did before this field existed.
+	HostCidrs     []string `protobuf:"bytes,45,rep,name=hostCidrs,proto3" json:"hostCidrs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -87,6 +98,13 @@ func (x *NodeRegistrationRequest) GetOs() string {
 		return x.Os
 	}
 	return ""
+}
+
+func (x *NodeRegistrationRequest) GetHostCidrs() []string {
+	if x != nil {
+		return x.HostCidrs
+	}
+	return nil
 }
 
 type NodeRegistrationResponse struct {
@@ -289,12 +307,13 @@ var File_nodeward_l1sec_proto protoreflect.FileDescriptor
 
 const file_nodeward_l1sec_proto_rawDesc = "" +
 	"\n" +
-	"\x14nodeward_l1sec.proto\x12\x1arunos.nodeward.proto.l1sec\"o\n" +
+	"\x14nodeward_l1sec.proto\x12\x1arunos.nodeward.proto.l1sec\"\x8d\x01\n" +
 	"\x17NodeRegistrationRequest\x12\x1c\n" +
 	"\tmachineId\x18\x19 \x01(\tR\tmachineId\x12\x10\n" +
 	"\x03aid\x18\x1e \x01(\tR\x03aid\x12\x14\n" +
 	"\x05token\x18# \x01(\tR\x05token\x12\x0e\n" +
-	"\x02os\x18( \x01(\tR\x02os\"\x82\x01\n" +
+	"\x02os\x18( \x01(\tR\x02os\x12\x1c\n" +
+	"\thostCidrs\x18- \x03(\tR\thostCidrs\"\x82\x01\n" +
 	"\x18NodeRegistrationResponse\x12\x10\n" +
 	"\x03nid\x182 \x01(\tR\x03nid\x12\x1e\n" +
 	"\n" +
