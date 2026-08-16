@@ -108,6 +108,17 @@ func scriptBudget(seconds int) time.Duration {
 	return budget
 }
 
+// scriptStreamCap bounds each captured stream. Nothing bounded them before, so
+// a script that dumped a log held all of it in the agent's memory and then built
+// a response nodeward could not accept: its gRPC limit is 16 MB, and exceeding
+// it loses the WHOLE reply, verdict included, rather than the excess.
+//
+// 2 MiB per stream leaves room for what the reply does to the bytes on the way:
+// 4 MiB of output, JSON-escaped, then base64-encoded at 4/3. No script's verdict
+// needs anywhere near it; a script that produces more is producing a log, and a
+// log belongs in the node log, not in an instruction reply.
+const scriptStreamCap = 2 << 20
+
 // scriptRun is what one foreground script run produced.
 type scriptRun struct {
 	Stdout   string
@@ -133,21 +144,53 @@ func runScriptFile(path string, budget time.Duration) scriptRun {
 		if cmd.Process == nil {
 			return nil
 		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return killProcessGroup(cmd.Process.Pid)
 	}
 	// A grandchild that survived the group kill must not hold Wait open.
 	cmd.WaitDelay = 5 * time.Second
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &cappedBuffer{limit: scriptStreamCap}
+	stderr := &cappedBuffer{limit: scriptStreamCap}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	runErr := cmd.Run()
 
+	return scriptVerdict(runErr, ctx.Err(), budget, stdout.String(), stderr.String())
+}
+
+// killProcessGroup SIGKILLs the whole group led by pid.
+//
+// ESRCH means the group is already gone, which is the normal end of a script
+// that finished on its own right as the deadline fired. exec replaces the
+// process's own result with whatever Cancel returns UNLESS that is
+// os.ErrProcessDone, so returning the raw ESRCH turned a clean run into an
+// error: the caller saw exit code -1 with the good verdict sitting in stdout.
+func killProcessGroup(pid int) error {
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	return nil
+}
+
+// scriptVerdict turns what cmd.Run produced into the verdict the caller acts on.
+// Separate from runScriptFile so the three-way relationship between the run
+// error, the context and the reported exit code can be tested directly: the
+// timing window that gets it wrong is microseconds wide and cannot be driven
+// from a real process.
+func scriptVerdict(runErr, ctxErr error, budget time.Duration, stdout, stderr string) scriptRun {
 	run := scriptRun{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded),
+		Stdout: stdout,
+		Stderr: stderr,
+		// The context is not enough on its own. It expires whenever a script runs
+		// to the end of its budget, INCLUDING when the script finished at that
+		// moment and exited 0. Only the run error says which of the two happened,
+		// so a timeout is a failed run whose deadline also passed, never a clean
+		// run that happened to end on the buzzer.
+		TimedOut: runErr != nil && errors.Is(ctxErr, context.DeadlineExceeded),
 	}
 	if runErr != nil {
 		var exitErr *exec.ExitError
@@ -160,11 +203,45 @@ func runScriptFile(path string, budget time.Duration) scriptRun {
 		// run". The timeout flag is what separates the two, and the reason is
 		// appended to stderr so an operator reading only the text still sees it.
 		if run.TimedOut {
-			run.ExitCode = -1
 			run.Stderr += fmt.Sprintf("\nrunos: the node agent killed this script after %s\n", budget)
 		}
 	}
 	return run
+}
+
+// cappedBuffer collects at most limit bytes and counts what it dropped. Writes
+// past the limit always report success: reporting a short write would make the
+// copier close the pipe, and the script would die of SIGPIPE for the crime of
+// being verbose.
+type cappedBuffer struct {
+	buf     bytes.Buffer
+	limit   int
+	dropped int64
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	if room := c.limit - c.buf.Len(); room > 0 {
+		if room > len(p) {
+			room = len(p)
+		}
+		c.buf.Write(p[:room])
+		p = p[room:]
+	}
+	c.dropped += int64(len(p))
+	return written, nil
+}
+
+// String is what the buffer collected, with a marker when it dropped anything.
+// Silently truncated output is worse than none: the reader cannot tell a script
+// that printed half a verdict from one that was cut off.
+func (c *cappedBuffer) String() string {
+	if c.dropped == 0 {
+		return c.buf.String()
+	}
+	return c.buf.String() + fmt.Sprintf(
+		"\n[runos: output truncated at %d bytes, %d further bytes were dropped]\n",
+		c.limit, c.dropped)
 }
 
 // buildRemoteScriptURL assembles the fetch URL from the validated script token
