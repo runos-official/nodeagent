@@ -20,6 +20,32 @@ const aptGet = "apt-get -o DPkg::Lock::Timeout=120 -y"
 // `timeout -k 5 60 sh -c '...'`; it contains no single quote on purpose.
 const kubeletLazyUnmount = `awk "\$2 ~ /^\/var\/lib\/kubelet/ {print \$2}" /proc/mounts | sort -r | while read -r m; do umount -lf "$m" 2>/dev/null || true; done`
 
+// networkdUnitDir holds the systemd-networkd units RunOS writes. Only a parameter of
+// vmGroupBridgeCleanupSteps so the test can drive the real removal against a fixture tree.
+const networkdUnitDir = "/etc/systemd/network"
+
+// vmGroupBridgeCleanupSteps removes the VM group pool bridges this node carries.
+//
+// Conductor's script 076-vm-group-bridge persists one bridge per VM group as
+// 90-rvg<gid>.netdev plus 90-rvg<gid>.network, and nothing in the uninstall knew about them.
+// MEASURED on ftb1 2026-08-16: after two full resets the box still had both unit files and the
+// live rvg* links with the groups' gateway addresses on them, so a re-provisioned node came up
+// owning segments for groups that no longer existed.
+//
+// Scoped to the 90-rvg prefix on purpose. wg0 and the cilium interfaces live in the same
+// directory and on the same link table, and a wider glob or an unfiltered link loop would take
+// the node off its own overlay to clean up a VM bridge.
+func vmGroupBridgeCleanupSteps(unitDir string) []string {
+	return []string{
+		fmt.Sprintf("rm -f %s/90-rvg*.netdev %s/90-rvg*.network || true", unitDir, unitDir),
+		// The name is field 2 of `ip -o link show`; a link with a peer reads as name@peer, so the
+		// suffix is cut before matching. grep is anchored so only the pool bridges match.
+		"for l in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep '^rvg' || true); do " +
+			"ip link set \"$l\" down || true; ip link delete \"$l\" || true; done",
+		"timeout 30 networkctl reload || true",
+	}
+}
+
 // step runs a best-effort cleanup command. Its raw output is sent to the durable
 // log only (via ExecuteCommandGetResponse -> roslog.I), never dumped to the
 // terminal. Best-effort steps are not load-bearing: their failure does not make
@@ -141,6 +167,14 @@ func Uninstall(full bool) error {
 	step("rm -f " + WgQuickUnitPath + " || true")
 	step("rm -rf " + wgQuickDropInDir + " || true")
 	step("systemctl daemon-reload || true")
+	roslog.Println("done")
+
+	// --- VM group pool bridges (best-effort) -------------------------------
+	// Before the WireGuard teardown's daemon-reload, so one reload covers both.
+	roslog.Print("Removing VM group pool bridges... ")
+	for _, s := range vmGroupBridgeCleanupSteps(networkdUnitDir) {
+		step(s)
+	}
 	roslog.Println("done")
 
 	// --- DNS / network reset (best-effort) ---------------------------------

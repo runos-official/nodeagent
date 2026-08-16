@@ -7,6 +7,26 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## Unreleased
+
+### Fixed
+
+- **`RUN_REMOTE_SCRIPT` reports stdout, stderr and the exit code separately** (goal 19 review,
+  findings 2, 3 and 6). `CombinedOutput` merged the two streams, so any script that wrote a
+  diagnostic to stderr corrupted its own JSON verdict, and the exit code was thrown away, so a
+  `set -e` script that aborted before printing anything read as success with an empty body. The
+  response keeps `response` as stdout alone for compatibility and adds `stderr`, `exitCode` and
+  `timedOut`.
+- **A script run is bounded and killed by process group.** The request carries `timeoutSeconds`
+  (default 15 minutes, capped at 60); the run uses `exec.CommandContext` with `Setpgid` and a
+  `kill(-pid)` cancel, so a hung script no longer holds one of the five instruction workers
+  forever and a grandchild cannot keep the output pipes open.
+- **The uninstall removes the VM group pool bridges.** Conductor's `076-vm-group-bridge` persists
+  `/etc/systemd/network/90-rvg<gid>.netdev` and `.network`; nothing removed them, so a wiped node
+  still carried the units and the live `rvg*` links with their gateway addresses (measured on ftb1
+  after two full resets). Scoped to the `90-rvg` prefix and to `rvg*` links, so `wg0` and the
+  cilium interfaces are never touched.
+
 ## v1.8.0-rc.13
 
 ### Fixed
