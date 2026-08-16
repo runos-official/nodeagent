@@ -75,6 +75,13 @@ func TestVmGroupBridgeCleanupSteps_DeletesOnlyTheRvgLinks(t *testing.T) {
 		t.Fatalf("fake ip write failed: %v", err)
 	}
 
+	// A stand-in for `timeout`, which macOS does not ship. It drops the duration
+	// and runs the rest, so the step is exercised exactly as written.
+	fakeTimeout := "#!/bin/sh\nshift\nexec \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "timeout"), []byte(fakeTimeout), 0o755); err != nil {
+		t.Fatalf("fake timeout write failed: %v", err)
+	}
+
 	steps := vmGroupBridgeCleanupSteps(t.TempDir())
 	if len(steps) < 2 {
 		t.Fatalf("expected a link-deletion step, got %d steps", len(steps))
@@ -95,6 +102,21 @@ func TestVmGroupBridgeCleanupSteps_DeletesOnlyTheRvgLinks(t *testing.T) {
 		if strings.Contains(log, forbidden) {
 			t.Errorf("the cleanup must never run %q, got:\n%s", forbidden, log)
 		}
+	}
+}
+
+// TestVmGroupBridgeCleanupSteps_BoundsTheLinkLoop: every other command in the
+// uninstall that talks to the kernel or to systemd runs under `timeout 30`. The
+// link loop did not, so an `ip` that wedged on a stuck netlink socket held the
+// whole uninstall open with no way out, on a node the operator has already been
+// told is being wiped.
+func TestVmGroupBridgeCleanupSteps_BoundsTheLinkLoop(t *testing.T) {
+	steps := vmGroupBridgeCleanupSteps("/etc/systemd/network")
+	if len(steps) < 2 {
+		t.Fatalf("expected a link-deletion step, got %d steps", len(steps))
+	}
+	if !strings.HasPrefix(steps[1], "timeout 30 ") {
+		t.Errorf("the link-deletion loop must be bounded like the other steps, got: %s", steps[1])
 	}
 }
 

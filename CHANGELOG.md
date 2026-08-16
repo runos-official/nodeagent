@@ -9,6 +9,25 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+### Fixed
+
+- **A script that finished right at its budget is no longer reported as a timeout** (goal 19
+  second review, finding 25). `timedOut` was taken from the context alone, and the context always
+  expires when a script runs to the end of its budget, including when the script finished at that
+  moment and exited 0. The kill of the process group also returned its raw `ESRCH` when the group
+  had already gone, and `exec` replaces the process's own result with whatever `Cancel` returns,
+  so a clean run reported `exitCode -1, timedOut true` with the good verdict sitting in `response`.
+  Conductor reads `timedOut` and throws the verdict away, so a successful step read as a hung node.
+  The kill now returns `os.ErrProcessDone` for an already-dead group, and `timedOut` needs a failed
+  run as well as an expired deadline.
+- **A script's captured output is capped at 2 MiB per stream**, with a marker naming how much was
+  dropped. Both buffers grew without limit, so a script that dumped a log held all of it in the
+  agent's memory and then built a reply past nodeward's 16 MB gRPC limit, which loses the whole
+  reply, verdict included, rather than the excess.
+- **The uninstall's VM group bridge loop runs under `timeout 30`** like every other step that talks
+  to the kernel. An `ip` wedged on a stuck netlink socket would otherwise hold the whole uninstall
+  open with no way out.
+
 ## v1.8.0-rc.14
 
 ### Fixed

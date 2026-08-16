@@ -40,8 +40,14 @@ func vmGroupBridgeCleanupSteps(unitDir string) []string {
 		fmt.Sprintf("rm -f %s/90-rvg*.netdev %s/90-rvg*.network || true", unitDir, unitDir),
 		// The name is field 2 of `ip -o link show`; a link with a peer reads as name@peer, so the
 		// suffix is cut before matching. grep is anchored so only the pool bridges match.
-		"for l in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep '^rvg' || true); do " +
-			"ip link set \"$l\" down || true; ip link delete \"$l\" || true; done",
+		//
+		// Bounded by `timeout 30` like every other step that talks to the kernel: an `ip` wedged
+		// on a stuck netlink socket would otherwise hold the whole uninstall open with no way
+		// out. Run under `timeout 30 sh -c '...'`, so the body carries no single quote: awk's
+		// program is double-quoted and its $2 escaped from the outer shell.
+		`timeout 30 sh -c 'for l in $(ip -o link show 2>/dev/null | awk -F": " "{print \$2}" | ` +
+			`cut -d@ -f1 | grep "^rvg" || true); do ip link set "$l" down || true; ` +
+			`ip link delete "$l" || true; done' || true`,
 		"timeout 30 networkctl reload || true",
 	}
 }
@@ -170,7 +176,9 @@ func Uninstall(full bool) error {
 	roslog.Println("done")
 
 	// --- VM group pool bridges (best-effort) -------------------------------
-	// Before the WireGuard teardown's daemon-reload, so one reload covers both.
+	// After the WireGuard teardown, and it reloads separately: these are networkd
+	// units, so they need `networkctl reload`, which the WireGuard block's
+	// `systemctl daemon-reload` does not do.
 	roslog.Print("Removing VM group pool bridges... ")
 	for _, s := range vmGroupBridgeCleanupSteps(networkdUnitDir) {
 		step(s)
