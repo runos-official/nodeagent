@@ -9,6 +9,8 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.14
+
 ### Fixed
 
 - **`RUN_REMOTE_SCRIPT` reports stdout, stderr and the exit code separately** (goal 19 review,
