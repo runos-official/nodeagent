@@ -9,6 +9,8 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.16
+
 ### Fixed
 
 - **A failed Kubernetes read no longer demotes the node in RunOS's records** (goal 19 review,
