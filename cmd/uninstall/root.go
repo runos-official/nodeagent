@@ -57,14 +57,31 @@ that were installed by nodeward. This is DESTRUCTIVE: it wipes Kubernetes
 		uninstallErr := commons.Uninstall(true)
 		if uninstallErr != nil {
 			// A partial wipe must NOT look identical to a clean one: surface the
-			// exact load-bearing steps that failed and do not reboot, so the
-			// operator can investigate the node before it disappears.
+			// exact load-bearing steps that failed.
 			// The remedy names the reboot FIRST (goal 23, F9). A partial uninstall stops every
 			// systemd unit and deletes every config directory while leaving kube-apiserver
 			// listening on 6443 and cilium-agent running, because containerd's shim children are
 			// reparented rather than stopped. Re-running the uninstall cannot clear that, and
 			// neither can `kubeadm reset -f`: only a reboot does. Measured on all four campaign
 			// hosts, still serving on 6443 more than two hours later.
+			//
+			// Interactive: do not reboot, so the operator can inspect the node before it
+			// disappears. --yes (goal 23 review, F9-a): nobody is there to inspect, and a node
+			// left half-wiped with a live API server is the worse outcome, so reboot anyway.
+			if assumeYes {
+				roslog.E("Partial uninstall; rebooting anyway because --yes was given", uninstallErr)
+				roslog.Println("Partial uninstall: " + uninstallErr.Error())
+				roslog.Println("Rebooting anyway (--yes) so no orphaned Kubernetes process survives. Inspect /var/log/runos.log for the failing step.")
+				time.Sleep(5 * time.Second)
+				if err := commons.RebootServer(); err != nil {
+					return roslog.Fail(
+						"Reboot node",
+						err.Error(),
+						"partial uninstall and the node did not reboot; reboot manually with `sudo systemctl reboot`",
+					)
+				}
+				return nil
+			}
 			return roslog.Fail(
 				"Uninstall node",
 				uninstallErr.Error(),

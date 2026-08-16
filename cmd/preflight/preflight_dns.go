@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -115,16 +117,36 @@ func netMeasureResolve(host string) (bool, string, time.Duration) {
 }
 
 // netConfiguredResolvers reads the DNS servers this box is configured to ask.
+func netConfiguredResolvers() []string {
+	return netConfiguredResolversFrom("/")
+}
+
+// netConfiguredResolversFrom is netConfiguredResolvers rooted at root, so a test can lay the
+// files out in a temp dir.
 //
 // systemd-resolved's own config first, because that is the file RunOS writes and the one that
-// carries a dead cluster resolver after the cluster is gone. /etc/resolv.conf second, which on a
-// systemd box usually just points at the stub.
-func netConfiguredResolvers() []string {
+// carries a dead cluster resolver after the cluster is gone; then its resolved.conf.d drop-ins,
+// where an admin override lives. /run/systemd/resolve/resolv.conf next: that is the effective
+// upstream list resolved actually uses (goal 23 review, F4-b). /etc/resolv.conf last, which on
+// a systemd box usually just points at the stub.
+func netConfiguredResolversFrom(root string) []string {
 	var out []string
-	if body, err := os.ReadFile("/etc/systemd/resolved.conf"); err == nil {
+	if body, err := os.ReadFile(filepath.Join(root, "etc/systemd/resolved.conf")); err == nil {
 		out = append(out, netParseConfiguredResolvers(string(body))...)
 	}
-	if body, err := os.ReadFile("/etc/resolv.conf"); err == nil {
+	if dropIns, err := filepath.Glob(filepath.Join(root, "etc/systemd/resolved.conf.d/*.conf")); err == nil {
+		sort.Strings(dropIns)
+		for _, p := range dropIns {
+			if body, err := os.ReadFile(p); err == nil {
+				out = append(out, netParseConfiguredResolvers(string(body))...)
+			}
+		}
+	}
+	for _, rel := range []string{"run/systemd/resolve/resolv.conf", "etc/resolv.conf"} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			continue
+		}
 		for _, line := range strings.Split(string(body), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "nameserver ") {

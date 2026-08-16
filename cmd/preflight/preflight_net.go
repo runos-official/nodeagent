@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/http/httpproxy"
@@ -67,6 +68,18 @@ func netDial(host string, port int) error {
 	return nil
 }
 
+// netTLSClientConfig is the TLS config every probe client uses. nil in production (system
+// roots). A test points it at a local server's certificate so HTTP/2 negotiation can be proven
+// without the network; see netTLSClientConfigForTest.
+var netTLSClientConfig *tls.Config
+
+// netTLSClientConfigForTest installs cfg and returns a func that restores the previous value.
+func netTLSClientConfigForTest(cfg *tls.Config) func() {
+	prev := netTLSClientConfig
+	netTLSClientConfig = cfg
+	return func() { netTLSClientConfig = prev }
+}
+
 // netHTTPClient builds an http.Client that resolves proxy settings exactly the
 // way the agent's own HTTP egress does (ProxyFromEnvironment), so a preflight
 // verdict matches real behaviour. follow controls redirect following.
@@ -76,6 +89,7 @@ func netHTTPClient(follow bool) *http.Client {
 		DialContext: (&net.Dialer{
 			Timeout: netDialTimeout,
 		}).DialContext,
+		TLSClientConfig:       netTLSClientConfig,
 		TLSHandshakeTimeout:   netDialTimeout,
 		ResponseHeaderTimeout: netHTTPTimeout,
 		// Goal 23 F28: setting DialContext switches OFF Go's automatic HTTP/2
@@ -557,6 +571,34 @@ func checkNodewardTlsHandshakePinned() error {
 	return nil
 }
 
+// egressCheckName is the registry name of checkEgressEndpointSetComplete. The check names it in
+// its own remedy (`--skip-check egress-endpoints`), so the two must not drift.
+const egressCheckName = "egress-endpoints"
+
+// netEgressTarget is one HTTPS endpoint the egress check probes.
+type netEgressTarget struct{ host, path, why string }
+
+// netEgressTargets is the fixed endpoint set plus the CDN host when --cdn was given.
+func netEgressTargets() []netEgressTarget {
+	targets := make([]netEgressTarget, 0, len(netEgressEndpoints)+1)
+	for _, e := range netEgressEndpoints {
+		targets = append(targets, netEgressTarget{e.host, e.path, e.why})
+	}
+	if cdn := netCDNHost(); cdn != "" {
+		targets = append(targets, netEgressTarget{cdn, "/", "the L1Sec CA / artifacts from the CDN"})
+	} else {
+		roslog.W("no --cdn provided; CDN host not probed in egress check", nil)
+	}
+	return targets
+}
+
+// netProbeHTTPSFn and netMeasureResolveFn are the seams the egress check calls through, so a
+// test can stand in a fake and prove ordering and concurrency without the network.
+var (
+	netProbeHTTPSFn     = netProbeHTTPS
+	netMeasureResolveFn = netMeasureResolve
+)
+
 // checkEgressEndpointSetComplete probes EVERY HTTPS endpoint the install pulls
 // from (not a sampled subset), via Go net/http with ProxyFromEnvironment so the
 // verdict matches the agent's real egress. It prevents the late, opaque failure
@@ -564,50 +606,77 @@ func checkNodewardTlsHandshakePinned() error {
 // the CDN) lets registration succeed but image/binary pulls fail mid-install.
 // Any non-5xx response counts as reachable (ghcr.io/quay.io answer 401 at /v2/);
 // 429 is noted as rate-limiting but not treated as unreachable.
+//
+// Order of work (goal 23 review, F4-a): resolution is MEASURED for every target
+// first and the result kept, then the probes run, then each failure is
+// classified with the pre-measured value. Measuring after a failed probe read a
+// resolver that was slow once and cached by then as "resolved in 1ms then timed
+// out connecting (firewall)". Both passes run concurrently across targets
+// (F28-c) with results collected in order, so a fully blocked host reports in
+// about one probe budget instead of nine in a row.
 func checkEgressEndpointSetComplete() error {
-	type target struct{ host, path, why string }
-	targets := make([]target, 0, len(netEgressEndpoints)+1)
-	for _, e := range netEgressEndpoints {
-		targets = append(targets, target{e.host, e.path, e.why})
+	targets := netEgressTargets()
+	// Goal 23 F4: read the resolver list once; the file does not change mid-check.
+	resolvers := netConfiguredResolvers()
+
+	type resolution struct {
+		resolved bool
+		err      string
+		took     time.Duration
 	}
-	if cdn := netCDNHost(); cdn != "" {
-		targets = append(targets, target{cdn, "/", "the L1Sec CA / artifacts from the CDN"})
-	} else {
-		roslog.W("no --cdn provided; CDN host not probed in egress check", nil)
+	resolutions := make([]resolution, len(targets))
+	var wg sync.WaitGroup
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, host string) {
+			defer wg.Done()
+			ok, e, d := netMeasureResolveFn(host)
+			resolutions[i] = resolution{ok, e, d}
+		}(i, t.host)
 	}
+	wg.Wait()
+
+	type probe struct {
+		code int
+		err  error
+	}
+	probes := make([]probe, len(targets))
+	for i, t := range targets {
+		wg.Add(1)
+		go func(i int, t netEgressTarget) {
+			defer wg.Done()
+			code, err := netProbeHTTPSFn(t.host, t.path)
+			probes[i] = probe{code, err}
+		}(i, t)
+	}
+	wg.Wait()
 
 	var unreachable []string
 	var rateLimited []string
-	// Goal 23 F4: RESOLVE FIRST, and measure it. A timeout has three distinct causes that need
-	// three different sentences, and the check used to collapse all of them into a firewall
-	// verdict pointing at infrastructure the operator often does not control. Read once for the
-	// whole loop; the file does not change mid-check.
-	resolvers := netConfiguredResolvers()
 	dnsFaults := 0
-	for _, t := range targets {
-		code, err := netProbeHTTPS(t.host, t.path)
-		if err != nil {
-			resolved, resolveErr, resolveTime := netMeasureResolve(t.host)
-			if !resolved || resolveTime >= netSlowResolveThreshold {
+	for i, t := range targets {
+		r, p := resolutions[i], probes[i]
+		if p.err != nil {
+			if !r.resolved || r.took >= netSlowResolveThreshold {
 				dnsFaults++
 			}
 			unreachable = append(unreachable, fmt.Sprintf("%s (%s): %s", t.host, t.why, netClassifyEgressFailure(netEgressDiagnosis{
-				resolved:            resolved,
-				resolveErr:          resolveErr,
-				resolveTime:         resolveTime,
-				probeErrorMsg:       err.Error(),
+				resolved:            r.resolved,
+				resolveErr:          r.err,
+				resolveTime:         r.took,
+				probeErrorMsg:       p.err.Error(),
 				configuredResolvers: resolvers,
 			})))
 			continue
 		}
-		if code == 429 {
+		if p.code == 429 {
 			rateLimited = append(rateLimited, t.host)
 			continue
 		}
-		if code >= 500 {
+		if p.code >= 500 {
 			// A 5xx is the endpoint's own problem, not an allowlist gap. Don't
 			// block egress on a transient upstream error.
-			roslog.W("egress endpoint returned a server error; not treated as blocked", nil, "host", t.host, "code", code)
+			roslog.W("egress endpoint returned a server error; not treated as blocked", nil, "host", t.host, "code", p.code)
 			continue
 		}
 		// Any other status (200/301/401/403/...) proves we reached it.
@@ -629,9 +698,12 @@ func checkEgressEndpointSetComplete() error {
 			strings.Join(unreachable, "\n  - "))
 	}
 
+	// Goal 23 review, F28-a: this check has been wrong about healthy machines before (F28). Give
+	// the operator a cross-check that does not depend on this client, and a way past this one
+	// check when the cross-check passes.
 	return fmt.Errorf(
-		"Cannot reach required HTTPS endpoint(s) on 443:\n  - %s\n\nThe install needs these to pull the node binary, the L1Sec CA, and container images; your firewall or proxy allowlist is missing one or more. Allow HTTPS egress to ALL of: github.com, objects.githubusercontent.com, pkgs.k8s.io, registry.k8s.io, registry-1.docker.io, ghcr.io, quay.io, helm.cilium.io, and the CDN host.\nThen re-run 'sudo runos preflight'.",
-		strings.Join(unreachable, "\n  - "))
+		"Cannot reach required HTTPS endpoint(s) on 443:\n  - %s\n\nThe install needs these to pull the node binary, the L1Sec CA, and container images; your firewall or proxy allowlist is missing one or more. Allow HTTPS egress to ALL of: github.com, objects.githubusercontent.com, pkgs.k8s.io, registry.k8s.io, registry-1.docker.io, ghcr.io, quay.io, helm.cilium.io, and the CDN host.\nThen re-run 'sudo runos preflight'.\n\nIf `curl -sS -o /dev/null -w '%%{http_code}' https://<host>/` succeeds from this machine for every host listed, this is a RunOS preflight defect: report it and re-run with --skip-check %s (or %s=%s in the installer's environment).",
+		strings.Join(unreachable, "\n  - "), egressCheckName, skipCheckEnv, egressCheckName)
 }
 
 // netSummarizeErr turns a probe error into a short operator-readable cause.

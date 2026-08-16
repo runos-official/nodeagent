@@ -1,6 +1,8 @@
 package preflight
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -90,5 +92,32 @@ func TestNetParseConfiguredResolversIgnoresCommentsAndBlanks(t *testing.T) {
 	got := netParseConfiguredResolvers("[Resolve]\n# DNS=9.9.9.9\nDNS=\n")
 	if len(got) != 0 {
 		t.Fatalf("expected no configured resolver, got %v", got)
+	}
+}
+
+// Goal 23 review, F4-b. systemd-resolved keeps its effective upstreams in
+// /run/systemd/resolve/resolv.conf and admins drop overrides in resolved.conf.d/*.conf; the
+// message listed neither, so a dead resolver configured there was invisible.
+func TestNetConfiguredResolversReadsRuntimeAndDropIns(t *testing.T) {
+	root := t.TempDir()
+	mustWrite := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite("etc/systemd/resolved.conf", "[Resolve]\nDNS=10.0.0.1\n")
+	mustWrite("etc/systemd/resolved.conf.d/runos.conf", "[Resolve]\nDNS=10.42.0.53\n")
+	mustWrite("run/systemd/resolve/resolv.conf", "nameserver 192.168.0.1\nnameserver 1.1.1.1\n")
+	mustWrite("etc/resolv.conf", "nameserver 127.0.0.53\n")
+
+	got := netConfiguredResolversFrom(root)
+	want := []string{"10.0.0.1", "10.42.0.53", "192.168.0.1", "1.1.1.1", "127.0.0.53"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("resolvers = %v, want %v", got, want)
 	}
 }

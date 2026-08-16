@@ -15,6 +15,11 @@ import (
 // env-assignment as a command and fail instantly (the apt-remove never runs).
 const aptGet = "apt-get -o DPkg::Lock::Timeout=120 -y"
 
+// kubeletLazyUnmount lazy-unmounts everything under /var/lib/kubelet, deepest first. Lazy,
+// because a mount held by an orphaned process still detaches from the tree. Run under
+// `timeout -k 5 60 sh -c '...'`; it contains no single quote on purpose.
+const kubeletLazyUnmount = `awk "\$2 ~ /^\/var\/lib\/kubelet/ {print \$2}" /proc/mounts | sort -r | while read -r m; do umount -lf "$m" 2>/dev/null || true; done`
+
 // step runs a best-effort cleanup command. Its raw output is sent to the durable
 // log only (via ExecuteCommandGetResponse -> roslog.I), never dumped to the
 // terminal. Best-effort steps are not load-bearing: their failure does not make
@@ -85,10 +90,23 @@ func Uninstall(full bool) error {
 	// Best-effort and ordered: stop the kubelet so nothing re-attaches a volume as fast as it is
 	// detached, drop the DRBD devices that hold the bind mounts open, then lazy-unmount deepest
 	// first. Lazy, because a mount held by an orphaned process still detaches from the tree.
+	//
+	// Every `timeout` here carries -k (goal 23 review, F9-b): a process that ignores TERM,
+	// which is exactly what a wedged kubeadm or drbdsetup does, would otherwise outlive the
+	// timeout and hang the uninstall. The umount loop is bounded too; a stuck umount on a
+	// dead DRBD backing device blocks forever without it.
 	step("timeout 30 systemctl stop kubelet || true")
-	step("if command -v drbdsetup >/dev/null 2>&1; then timeout 30 drbdsetup down all || true; fi")
-	step("awk '$2 ~ \"^/var/lib/kubelet\" {print $2}' /proc/mounts | sort -r | while read -r m; do umount -lf \"$m\" 2>/dev/null || true; done")
-	critical("kubeadm reset", "if command -v kubeadm >/dev/null 2>&1; then timeout 120 kubeadm reset -f; fi")
+	step("if command -v drbdsetup >/dev/null 2>&1; then timeout -k 5 30 drbdsetup down all || true; fi")
+	step("timeout -k 5 60 sh -c '" + kubeletLazyUnmount + "' || true")
+	critical("kubeadm reset", "if command -v kubeadm >/dev/null 2>&1; then timeout -k 10 120 kubeadm reset -f; fi")
+	// Kill the pod sandboxes and shims BEFORE containerd stops (goal 23 review, F9-a).
+	// Stopping containerd does not stop its shim children: they are reparented and keep
+	// kube-apiserver and cilium-agent running, listening on 6443 and holding the CNI
+	// interfaces, until a reboot. Measured on all four campaign hosts, still serving on 6443
+	// two hours after a partial uninstall. Best-effort: kubeadm reset usually did this
+	// already, and a missing crictl on a half-uninstalled box is not a failure.
+	step("if command -v crictl >/dev/null 2>&1; then timeout -k 5 60 crictl -r unix:///run/containerd/containerd.sock rmp -fa || true; fi")
+	step("pkill -9 -f containerd-shim || true")
 	// Stop kubelet + the container runtime before wiping their data dirs so nothing
 	// holds them open. kubeadm reset does this when present, but it may be absent on a
 	// half-uninstalled box (the guard above skips it), so do it explicitly. Best-effort.
@@ -102,7 +120,7 @@ func Uninstall(full bool) error {
 	// pod-volume mounts (SA-token / secret / emptyDir tmpfs), so lazy-unmount
 	// everything under it (deepest first) before removing, or `rm` fails "device busy".
 	critical("wipe /etc/kubernetes", "rm -rf /etc/kubernetes; [ ! -e /etc/kubernetes ]")
-	critical("wipe /var/lib/kubelet", "awk '$2 ~ \"^/var/lib/kubelet\" {print $2}' /proc/mounts | sort -r | while read -r m; do umount -lf \"$m\" 2>/dev/null || true; done; rm -rf /var/lib/kubelet; [ ! -e /var/lib/kubelet ]")
+	critical("wipe /var/lib/kubelet", "timeout -k 5 60 sh -c '"+kubeletLazyUnmount+"' || true; rm -rf /var/lib/kubelet; [ ! -e /var/lib/kubelet ]")
 	critical("wipe /var/lib/etcd", "rm -rf /var/lib/etcd; [ ! -e /var/lib/etcd ]")
 	step("rm -rf ~/.kube || true")
 	// CNI configurations (best-effort)
@@ -117,6 +135,12 @@ func Uninstall(full bool) error {
 	step("timeout 30 systemctl disable wg-quick@wg0 || true")
 	step("ip link delete wg0 || true")
 	step("rm -rf /etc/wireguard || true")
+	// The RunOS instance unit and the older drop-in (goal 23 review): both are RunOS files
+	// and both survived every uninstall, so a re-provisioned box carried a wg0 unit for a
+	// tunnel that no longer existed.
+	step("rm -f " + WgQuickUnitPath + " || true")
+	step("rm -rf " + wgQuickDropInDir + " || true")
+	step("systemctl daemon-reload || true")
 	roslog.Println("done")
 
 	// --- DNS / network reset (best-effort) ---------------------------------

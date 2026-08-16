@@ -28,6 +28,11 @@ var server string
 // probed against a default/derived host or skipped with a warning.
 var cdnURL string
 
+// skipChecks is the comma list of check names `runos preflight --skip-check`
+// leaves out. Goal 23 review, F28-a: a network check that is wrong about a
+// healthy machine needs an escape narrower than RUNOS_DEV_SKIP_PREFLIGHT=1.
+var skipChecks string
+
 var RootCmd = &cobra.Command{
 	Use:   "preflight",
 	Short: "Check if the system is ready for installation",
@@ -47,6 +52,8 @@ func init() {
 		"Nodeward host this node will register against (probed for reachability)")
 	RootCmd.PersistentFlags().StringVar(&cdnURL, "cdn", "",
 		"Base CDN URL the installer pulls artifacts from (probed for reachability)")
+	RootCmd.PersistentFlags().StringVar(&skipChecks, "skip-check", "",
+		"Comma-separated check names to skip (e.g. egress-endpoints); "+skipCheckEnv+" does the same for the installer. Fatal prerequisites always run")
 }
 
 // checkRoot ensures we are running as the effective root user. Almost every

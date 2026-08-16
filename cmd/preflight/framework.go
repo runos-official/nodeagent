@@ -47,19 +47,58 @@ func runPreflightChecks() error {
 		fmt.Println("RUNOS_DEV_SKIP_PREFLIGHT=1 is set, skipping preflight checks")
 		return nil
 	}
-	return runChecks(preflightChecks())
+	return runChecksSkipping(preflightChecks(), currentSkipChecks())
 }
 
-// runChecks is the phase runner, split out from runPreflightChecks so it can be
-// exercised with injected (mock) checks. It is behavior-identical to the inline
-// loop it replaced: fatal prerequisites fail-fast in declared order; then local
-// (non-net) checks, then network checks, each phase running EVERY check and
-// collecting findings rather than stopping at the first.
+// skipCheckEnv is the environment fallback for --skip-check. The installer runs
+// `runos preflight` itself, so an operator who cannot edit its flags can still
+// pass a skip: `curl ... | sudo RUNOS_PREFLIGHT_SKIP=<name> bash`.
+const skipCheckEnv = "RUNOS_PREFLIGHT_SKIP"
+
+// currentSkipChecks merges the --skip-check flag with RUNOS_PREFLIGHT_SKIP.
+func currentSkipChecks() map[string]bool {
+	set := parseSkipChecks(skipChecks)
+	for name := range parseSkipChecks(os.Getenv(skipCheckEnv)) {
+		set[name] = true
+	}
+	return set
+}
+
+// parseSkipChecks turns a comma list of check names into a set. Blank entries
+// contribute nothing.
+func parseSkipChecks(list string) map[string]bool {
+	set := map[string]bool{}
+	for _, name := range strings.Split(list, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			set[name] = true
+		}
+	}
+	return set
+}
+
+// runChecks is the phase runner with no skips, kept for the tests that pin the
+// phase contract.
 func runChecks(checks []check) error {
+	return runChecksSkipping(checks, nil)
+}
+
+// runChecksSkipping is the phase runner, split out from runPreflightChecks so it
+// can be exercised with injected (mock) checks. Fatal prerequisites fail-fast in
+// declared order; then local (non-net) checks, then network checks, each phase
+// running EVERY check and collecting findings rather than stopping at the first.
+//
+// A non-fatal check named in skip does not run and is reported as skipped (goal
+// 23 review, F28-a): when a network check is wrong about a healthy machine the
+// operator needs a way past that one check, not past all of preflight. A fatal
+// prerequisite is never skipped: nothing after it is meaningful without it.
+func runChecksSkipping(checks []check, skip map[string]bool) error {
 	// 1. Fatal prerequisites, fail-fast and in declared order.
 	for _, c := range checks {
 		if !c.fatal {
 			continue
+		}
+		if skip[c.name] {
+			roslog.W("a fatal prerequisite cannot be skipped; running it", nil, "check", c.name)
 		}
 		if err := c.fn(); err != nil {
 			reportFatal(c, err)
@@ -73,6 +112,11 @@ func runChecks(checks []check) error {
 	collect := func(wantNet bool) {
 		for _, c := range checks {
 			if c.fatal || c.net != wantNet {
+				continue
+			}
+			if skip[c.name] {
+				fmt.Fprintf(os.Stderr, "\n%s⚠ SKIPPED [%s]:%s skipped by --skip-check / %s. Its failure mode is NOT covered.\n",
+					roslog.ColorYellow, c.name, roslog.ColorReset, skipCheckEnv)
 				continue
 			}
 			if err := c.fn(); err != nil {
@@ -187,7 +231,7 @@ func preflightChecks() []check {
 		{name: "nodeward-reachable", fn: checkNodewardReachable, sev: sevBlock, net: true},
 		{name: "nodeward-highport", fn: checkNodewardHighPortVs443, sev: sevBlock, net: true},
 		{name: "nodeward-tls-pin", fn: checkNodewardTlsHandshakePinned, sev: sevBlock, net: true},
-		{name: "egress-endpoints", fn: checkEgressEndpointSetComplete, sev: sevBlock, net: true}, // supersedes curl checkNetworkConnectivity
+		{name: egressCheckName, fn: checkEgressEndpointSetComplete, sev: sevBlock, net: true}, // supersedes curl checkNetworkConnectivity
 		{name: "captive-portal", fn: checkCaptivePortalContentCanary, sev: sevBlock, net: true},
 		{name: "apt-sources", fn: checkAptSourcesUsable, sev: sevBlock, net: true}, // supersedes checkBrokenAptSources
 

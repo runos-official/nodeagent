@@ -1,7 +1,10 @@
 package preflight
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -19,28 +22,52 @@ import (
 // http.Transport switches OFF Go's automatic HTTP/2 upgrade, so preflight spoke
 // HTTP/1.1 while every other tool on the box spoke HTTP/2. GitHub drops HTTP/1.1
 // from some hosts and returns an empty reply, which Go reports as `EOF`.
-// Measured against github.com, registry.k8s.io and quay.io: with DialContext set
-// and ForceAttemptHTTP2 off, the probe negotiates HTTP/1.1; with it on, HTTP/2.0.
 //
-// This test is hermetic on purpose. Asserting the negotiated protocol would need
-// the network, and the bug is a transport CONFIGURATION mistake, so the
-// configuration is the right thing to pin.
-func TestNetHTTPClientForcesHTTP2(t *testing.T) {
+// This test is hermetic and behavioural (goal 23 review, F28-b): a local TLS
+// server that offers h2 must see the probe arrive over HTTP/2. A struct-field
+// assertion could pass while a later change to the transport broke negotiation.
+func TestNetProbeNegotiatesHTTP2(t *testing.T) {
+	var sawProto string
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawProto = r.Proto
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	restore := netTLSClientConfigForTest(&tls.Config{RootCAs: pool})
+	defer restore()
+
 	for _, follow := range []bool{true, false} {
-		c := netHTTPClient(follow)
-		tr, ok := c.Transport.(*http.Transport)
-		if !ok {
-			t.Fatalf("follow=%v: transport is %T, want *http.Transport", follow, c.Transport)
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !tr.ForceAttemptHTTP2 {
-			t.Errorf("follow=%v: ForceAttemptHTTP2 is false. This client sets DialContext, "+
-				"which disables Go's automatic HTTP/2 upgrade, so it will speak HTTP/1.1 and "+
-				"report EOF against hosts that refuse HTTP/1.1. See goal 23 F28.", follow)
+		resp, err := netHTTPClient(follow).Do(req)
+		if err != nil {
+			t.Fatalf("follow=%v: probe failed: %v", follow, err)
 		}
-		if tr.DialContext == nil {
-			t.Errorf("follow=%v: DialContext is nil; if the custom dialer was removed, "+
-				"ForceAttemptHTTP2 is no longer load-bearing and this test should be revisited", follow)
+		resp.Body.Close()
+		if resp.ProtoMajor != 2 {
+			t.Errorf("follow=%v: negotiated %s, want HTTP/2. This client sets DialContext, "+
+				"which disables Go's automatic HTTP/2 upgrade unless ForceAttemptHTTP2 is on; "+
+				"hosts that refuse HTTP/1.1 then report EOF. See goal 23 F28.", follow, resp.Proto)
 		}
+	}
+
+	// The real probe path, end to end.
+	code, err := netProbeHTTPSOnce(srv.URL + "/")
+	if err != nil {
+		t.Fatalf("netProbeHTTPSOnce: %v", err)
+	}
+	if code != http.StatusOK {
+		t.Errorf("netProbeHTTPSOnce code = %d, want 200", code)
+	}
+	if sawProto != "HTTP/2.0" {
+		t.Errorf("server saw the probe as %q, want HTTP/2.0", sawProto)
 	}
 }
 

@@ -155,6 +155,55 @@ func TestRunChecksCollectsAndRoutes(t *testing.T) {
 	})
 }
 
+// Goal 23 review, F28-a. When a network check is wrong about a healthy machine, the operator
+// needs a way past it that is narrower than RUNOS_DEV_SKIP_PREFLIGHT=1 (which skips everything).
+// --skip-check <name>[,<name>] skips exactly the named non-fatal checks and says so.
+func TestRunChecksHonoursSkipList(t *testing.T) {
+	restore := silenceStderr(t)
+	defer restore()
+
+	var ran []string
+	track := func(name string, err error) func() error {
+		return func() error { ran = append(ran, name); return err }
+	}
+	checks := []check{
+		{name: "root", fn: track("root", nil), sev: sevBlock, fatal: true},
+		{name: "egress-endpoints", fn: track("egress-endpoints", fmt.Errorf("blocked")), sev: sevBlock, net: true},
+		{name: "ram", fn: track("ram", nil), sev: sevBlock},
+	}
+	if err := runChecksSkipping(checks, parseSkipChecks("egress-endpoints, ram,,")); err != nil {
+		t.Fatalf("the only failing check was skipped; want a pass, got %v", err)
+	}
+	if strings.Join(ran, ",") != "root" {
+		t.Errorf("ran %v, want only the fatal prerequisite (skipped checks must not run)", ran)
+	}
+
+	// A fatal prerequisite cannot be skipped: nothing after it is meaningful without it.
+	ran = nil
+	fatalFails := []check{{name: "root", fn: track("root", fmt.Errorf("not root")), sev: sevBlock, fatal: true}}
+	if err := runChecksSkipping(fatalFails, parseSkipChecks("root")); err == nil {
+		t.Fatal("a fatal prerequisite must run even when named in the skip list")
+	}
+	if strings.Join(ran, ",") != "root" {
+		t.Errorf("ran %v, want the fatal check to run", ran)
+	}
+}
+
+func TestParseSkipChecks(t *testing.T) {
+	got := parseSkipChecks(" a,b , ,c")
+	for _, name := range []string{"a", "b", "c"} {
+		if !got[name] {
+			t.Errorf("parseSkipChecks missed %q: %v", name, got)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("parseSkipChecks(\" a,b , ,c\") = %v, want 3 names", got)
+	}
+	if len(parseSkipChecks("")) != 0 {
+		t.Errorf("empty input must give an empty set")
+	}
+}
+
 // Pins indentLines: 2nd..nth lines of a multi-line remedy are indented so they
 // line up under the check header in the report (a flush-left remedy is a visible
 // formatting regression in the operator-facing output).
