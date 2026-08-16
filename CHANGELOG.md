@@ -7,6 +7,25 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.12
+
+### Fixed
+
+- **Preflight egress verdicts are measured in the right order and say when they might be wrong**
+  (goal 23 review of F4 and F28). DNS resolution is measured for every target BEFORE any probe,
+  so a resolver that was slow once and is now cached no longer reads as "resolved in 1ms then
+  timed out connecting (firewall)". The nine targets are probed concurrently (a fully blocked host
+  reports in seconds, not minutes). When the summary blames the allowlist it now also names the
+  `curl` cross-check and `--skip-check egress-endpoints` (new flag, also `RUNOS_PREFLIGHT_SKIP`)
+  for the case where the same URL answers from the box and preflight is the thing that is wrong.
+  The HTTP/2 guard is a hermetic negotiation test, not a struct-field assertion. The resolver
+  list also reads `resolved.conf.d/*.conf` and the runtime `resolv.conf`.
+- **Uninstall no longer leaves a live API server behind on the failure path** (goal 23 F9
+  follow-up). After `kubeadm reset`, orphaned pods and shims are stopped before containerd is;
+  every timeout kills after TERM (`timeout -k`); the partial-uninstall path reboots with `--yes`;
+  the control-plane-driven uninstall (nodes delete) logs its error and reboots instead of
+  returning silently. The `wg-quick@wg0` instance unit and its drop-in are removed.
+
 ## v1.8.0-rc.11
 
 ### Added
