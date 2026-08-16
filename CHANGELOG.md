@@ -9,6 +9,28 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+### Fixed
+
+- **A failed Kubernetes read no longer demotes the node in RunOS's records** (goal 19 review,
+  finding R6). The heartbeat built `isCp`, `isWorker` and `status` from `kubectl get node
+  <hostname>` through the agent's own kube proxy. Every one of them returned `false` / `false` /
+  `not_ready` when that read failed. Nodeward wrote those values, so its control-plane list
+  emptied, every agent's proxy lost its backends, and the remaining nodes reported `false` in
+  turn. Measured on cluster ede on 2026-08-16: one of three control planes was hard powered off
+  and within two minutes RunOS marked both SURVIVORS `not_ready` with `isCp=false`, refused VM
+  deletes, and broke kubectl through the proxy on every node, while Kubernetes itself stayed
+  healthy with etcd quorum.
+  - `IsCP()` now reads the LOCAL fact first: the node is a control plane if the kubeadm static pod
+    manifest `/etc/kubernetes/manifests/kube-apiserver.yaml` exists. The label read is the
+    fallback for a worker.
+  - A control plane reads its OWN API server (`https://127.0.0.1:6443` with `admin.conf`) before
+    the proxied path, so it still reports `ready` when the proxy has no targets.
+  - When every read fails the agent carries the last known role and status instead of inventing
+    a demotion, and reports `unknown` only when it has never read the node object.
+  - The heartbeat carries a new `rolesKnown` flag. `false` means the roles are carried, and
+    Nodeward refuses to write them. An older agent omits the field and Nodeward reads its absence
+    as `true`, which is the behaviour those agents already had.
+
 ## v1.8.0-rc.15
 
 ### Fixed

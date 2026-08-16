@@ -1,29 +1,11 @@
 package k8s
 
-import (
-	"os"
-	"strings"
-
-	"github.com/runos-official/nodeagent/roslog"
-)
-
-// IsCP reports whether the current node is a Kubernetes control plane node,
-// by examining its node labels for the control-plane role.
+// IsCP reports whether the current node is a Kubernetes control plane node.
+//
+// The kubeadm static pod manifest is checked first, because it is a LOCAL fact
+// that no API read failure can take away. The node labels are consulted only
+// when the manifest is absent, which is the worker case. See NodeRoleSnapshot
+// for the full reading and for the R6 incident this ordering exists for.
 func IsCP() bool {
-	hostname, err := os.Hostname()
-	if err != nil {
-		roslog.E("Error getting hostname", err)
-		return false
-	}
-
-	output, err := kubectlWithTimeout("get", "node", hostname, "-o", "jsonpath={.metadata.labels}")
-	if err != nil {
-		roslog.E("Error running kubectl command", err)
-		return false
-	}
-
-	labels := string(output)
-
-	return strings.Contains(labels, "node-role.kubernetes.io/control-plane") ||
-		strings.Contains(labels, "node-role.kubernetes.io/master")
+	return NodeRoleSnapshot().IsCp
 }

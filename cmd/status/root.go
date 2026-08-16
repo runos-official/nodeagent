@@ -252,8 +252,9 @@ func gatherReport() statusReport {
 	// Kubernetes.
 	r.K8s.Installed = k8s.IsInstalled()
 	if r.K8s.Installed {
-		isCp := k8s.IsCP()
-		isWorker := k8s.IsWorker()
+		snap := k8s.NodeRoleSnapshot()
+		isCp := snap.IsCp
+		isWorker := snap.IsWorker
 		switch {
 		case isCp && isWorker:
 			r.K8s.NodeType = "control-plane (can run workloads)"
@@ -264,7 +265,7 @@ func gatherReport() statusReport {
 		default:
 			r.K8s.NodeType = "unknown"
 		}
-		r.K8s.Status = k8s.GetStatus()
+		r.K8s.Status = snap.Status
 	}
 
 	// Config.

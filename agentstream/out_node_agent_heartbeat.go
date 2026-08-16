@@ -13,17 +13,27 @@ import (
 	"github.com/runos-official/nodeagent/version"
 )
 
+// heartbeatRequest is the wire payload of a node agent heartbeat. Nodeward
+// decodes exactly these field names in instructions/node_agent_heartbeat.go, so
+// a rename here silently changes what Nodeward stores.
+//
+// RolesKnown tells Nodeward whether isCp/isWorker come from a fresh read of the
+// node object (true) or are carried from the last known values (false). Nodeward
+// must not demote a node on a heartbeat whose roles are carried. An agent older
+// than v1.8.0-rc.16 omits the field, and Nodeward reads an absent field as true,
+// which is the behaviour those agents already had.
+type heartbeatRequest struct {
+	ExternalIpAddress string `json:"externalIpAddress"`
+	IsCp              bool   `json:"isCp"`
+	IsWorker          bool   `json:"isWorker"`
+	Status            string `json:"status"`
+	Version           string `json:"version"`
+	RolesKnown        bool   `json:"rolesKnown"`
+}
+
 // NodeAgentHeartbeat sends a single heartbeat to Nodeward with the node's
 // current role, status and version, and returns any send/decode error.
 func NodeAgentHeartbeat() error {
-	type HeartbeatRequest struct {
-		ExternalIpAddress string `json:"externalIpAddress"`
-		IsCp              bool   `json:"isCp"`
-		IsWorker          bool   `json:"isWorker"`
-		Status            string `json:"status"`
-		Version           string `json:"version"`
-	}
-
 	roslog.D("Sending heartbeat to nodeagent")
 
 	externalIp, err := commons.GetExternalIPAddress()
@@ -35,23 +45,30 @@ func NodeAgentHeartbeat() error {
 	var isCp bool
 	var isWorker bool
 	var status string
+	var rolesKnown bool
 
 	if k8s.IsInstalled() {
-		isCp = k8s.IsCP()
-		isWorker = k8s.IsWorker()
-		status = k8s.GetStatus()
+		snapshot := k8s.NodeRoleSnapshot()
+		isCp = snapshot.IsCp
+		isWorker = snapshot.IsWorker
+		status = snapshot.Status
+		rolesKnown = snapshot.RolesKnown
 	} else {
+		// Kubernetes is not installed. That IS a fresh, local fact, so the roles
+		// are known: this node holds no role.
 		isCp = false
 		isWorker = false
 		status = "not_installed"
+		rolesKnown = true
 	}
 
-	heartbeatRequestJsonB64, err := commons.JSONB64Encode(HeartbeatRequest{
+	heartbeatRequestJsonB64, err := commons.JSONB64Encode(heartbeatRequest{
 		ExternalIpAddress: externalIp,
 		IsCp:              isCp,
 		IsWorker:          isWorker,
 		Status:            status,
 		Version:           version.Version,
+		RolesKnown:        rolesKnown,
 	})
 
 	if err != nil {
