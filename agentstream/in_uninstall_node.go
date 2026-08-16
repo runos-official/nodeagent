@@ -1,9 +1,9 @@
 package agentstream
 
 import (
-	"time"
+	"fmt"
+	"os/exec"
 
-	"github.com/runos-official/nodeagent/commons"
 	pb "github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
 )
@@ -11,31 +11,66 @@ import (
 // UninstallNodeRequestType is the instruction type that uninstalls the node.
 const UninstallNodeRequestType = "UNINSTALL_NODE"
 
-// uninstallRebootDelay is how long the handler waits before rebooting, so the
-// response reaches nodeward first.
-const uninstallRebootDelay = 5 * time.Second
+// uninstallStartDelaySeconds is how long the detached unit waits before it starts
+// the uninstall, so this response reaches nodeward first.
+const uninstallStartDelaySeconds = 3
 
-// HandleUninstallNode uninstalls Kubernetes, Containerd and WireGuard from the node,
-// then reboots it.
+// HandleUninstallNode schedules the uninstall of Kubernetes, containerd and WireGuard,
+// followed by a reboot, in a transient systemd unit that outlives this process, and
+// answers at once.
 //
-// Goal 23 review, F9-c. The handler used to swallow commons.Uninstall's error and
-// never reboot, so `nodes delete` left a partially wiped node with kube-apiserver
-// and cilium-agent still running (containerd's reparented shim children survive
-// a `systemctl stop containerd`). Nodeward treats a non-answer as offline, so
-// nothing upstream noticed. The reboot runs after a short delay in a goroutine
-// so the response goes out first, and it runs on the failure path too: only a
-// reboot clears an orphaned API server.
+// Goal 23 review, F9-c, second pass. The first fix ran commons.Uninstall(true) inline
+// and rebooted from a goroutine. That cannot work: Uninstall's last steps are
+// `systemctl stop runos`, which SIGTERMs this very process (KillMode=control-group),
+// so the response was never sent and the goroutine died before it rebooted. Nodeward
+// treated the silence as "offline" and the box kept an orphaned kube-apiserver when
+// `kubeadm reset` had failed. Measured on the goal 23 reset of 8go, 2026-08-16: every
+// machine was wiped, none rebooted by itself.
+//
+// So the work moves out of the agent's cgroup: `runos uninstall --yes` runs in a
+// systemd-run unit (its own scope, not stopped with runos.service) and reboots on
+// success and on a partial wipe alike, because only a reboot clears a shim-orphaned
+// API server. The reply says "scheduled", which is the truth: the uninstall has not
+// happened yet when nodeward reads it, and the node record is deleted regardless.
 func HandleUninstallNode() (*pb.FromNodeAgent, error) {
-	roslog.I("Executing HandleUninstallNode")
-	if err := commons.Uninstall(true); err != nil {
-		roslog.E("Uninstall left components behind; rebooting anyway so no orphaned Kubernetes process survives", err)
+	roslog.I("Executing HandleUninstallNode: scheduling a detached uninstall and reboot")
+	if err := scheduleDetachedUninstall(uninstallStartDelaySeconds); err != nil {
+		roslog.E("Could not schedule the detached uninstall; nothing was removed", err)
+		return nil, err
 	}
-	go func() {
-		time.Sleep(uninstallRebootDelay)
-		if err := commons.RebootServer(); err != nil {
-			roslog.E("Uninstall finished but the node did not reboot", err)
-		}
-	}()
-
 	return NoContentResponse, nil
+}
+
+// scheduleDetachedUninstall starts `runos uninstall --yes` and then a reboot inside a
+// transient systemd unit, after `delay` seconds. systemd-run puts the unit in its own
+// cgroup, so `systemctl stop runos` (which the uninstall itself runs) does not kill it.
+// The reboot runs unconditionally: `runos uninstall --yes` already reboots on a partial
+// wipe, and on a clean wipe the machine reboots so cilium links, DRBD modules and any
+// reparented process are gone and the box comes back joinable.
+func scheduleDetachedUninstall(delay int) error {
+	script := fmt.Sprintf(
+		"sleep %d; /usr/local/bin/runos uninstall --yes; systemctl reboot",
+		delay,
+	)
+	path, err := exec.LookPath("systemd-run")
+	if err != nil {
+		// No systemd-run: fall back to a setsid'd shell, which also survives the agent's
+		// stop because it is reparented to init rather than to runos.service.
+		cmd := exec.Command("setsid", "/bin/sh", "-c", script)
+		if startErr := cmd.Start(); startErr != nil {
+			return fmt.Errorf("setsid fallback failed: %w", startErr)
+		}
+		roslog.I("Detached uninstall scheduled via setsid", "pid", cmd.Process.Pid)
+		return nil
+	}
+	cmd := exec.Command(path,
+		"--collect",
+		"--description", "RunOS node uninstall and reboot",
+		"/bin/sh", "-c", script,
+	)
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		return fmt.Errorf("systemd-run failed: %v (%s)", runErr, string(out))
+	}
+	roslog.I("Detached uninstall scheduled via systemd-run", "delaySeconds", delay)
+	return nil
 }

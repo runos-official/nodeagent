@@ -80,7 +80,9 @@ that were installed by nodeward. This is DESTRUCTIVE: it wipes Kubernetes
 						"partial uninstall and the node did not reboot; reboot manually with `sudo systemctl reboot`",
 					)
 				}
-				return nil
+				// Rebooting does not make the wipe clean. A script that reads exit 0 as
+				// "uninstalled" would move on to a re-join that the leftovers then break.
+				return roslog.Fail("Uninstall node", uninstallErr.Error(), "partial uninstall; the node is rebooting to clear orphaned processes")
 			}
 			return roslog.Fail(
 				"Uninstall node",

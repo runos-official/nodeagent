@@ -7,6 +7,21 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0-rc.13
+
+### Fixed
+
+- **The control-plane-driven uninstall (`nodes delete`) really reboots the node now.** rc.12 ran
+  the uninstall inline and rebooted from a goroutine, but the uninstall's own `systemctl stop runos`
+  killed the agent process first, so the reply was never sent and no reboot happened (goal 23
+  review, 2026-08-16; measured on the reset of cluster 8go: every machine wiped, none rebooted).
+  The handler now answers at once and runs `runos uninstall --yes` followed by `systemctl reboot`
+  in a transient systemd unit that outlives the agent.
+- **`runos uninstall --yes` exits non-zero on a partial wipe** even though it reboots, so a script
+  cannot read a half-wiped node as clean.
+- The orphaned-shim kill after `kubeadm reset` matches only Kubernetes shims
+  (`-namespace k8s.io`), not a Docker daemon sharing the box, and no longer kills its own shell.
+
 ## v1.8.0-rc.12
 
 ### Fixed

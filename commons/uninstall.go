@@ -106,7 +106,7 @@ func Uninstall(full bool) error {
 	// two hours after a partial uninstall. Best-effort: kubeadm reset usually did this
 	// already, and a missing crictl on a half-uninstalled box is not a failure.
 	step("if command -v crictl >/dev/null 2>&1; then timeout -k 5 60 crictl -r unix:///run/containerd/containerd.sock rmp -fa || true; fi")
-	step("pkill -9 -f containerd-shim || true")
+	step("pkill -9 -f '[c]ontainerd-shim.*-namespace k8s.io' || true")
 	// Stop kubelet + the container runtime before wiping their data dirs so nothing
 	// holds them open. kubeadm reset does this when present, but it may be absent on a
 	// half-uninstalled box (the guard above skips it), so do it explicitly. Best-effort.
