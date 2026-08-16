@@ -1,8 +1,11 @@
 package agentstream
 
 import (
+	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +14,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/runos-official/nodeagent/commons"
@@ -60,10 +64,107 @@ type runRemoteScriptRequest struct {
 	Script          string            `json:"script"`
 	Params          map[string]string `json:"params"`
 	RunInBackground bool              `json:"runInBackground"`
+	// How long the script may run, in seconds. Absent or non-positive means the
+	// default below. Conductor sends the same budget it gives the gRPC call, so
+	// the agent gives up before the caller does and the verdict is the agent's
+	// rather than a transport timeout with no detail.
+	TimeoutSeconds int `json:"timeoutSeconds"`
 }
 
+// runRemoteScriptResponse is deliberately BACKWARD COMPATIBLE: `response` still
+// carries the script's output and remains the only field an older conductor
+// reads. What changed is that it is now stdout ALONE, with stderr and the exit
+// code as separate fields. Merging the two (CombinedOutput) meant any script
+// that wrote a diagnostic to stderr corrupted its own JSON verdict, and the exit
+// code was discarded entirely, so a `set -e` script that aborted before printing
+// anything reported success with an empty body.
 type runRemoteScriptResponse struct {
 	Response string `json:"response"`
+	Stderr   string `json:"stderr"`
+	ExitCode int    `json:"exitCode"`
+	// True only when the agent killed the script for exceeding its budget, which
+	// is a different fact from a script that chose to exit non-zero.
+	TimedOut bool `json:"timedOut"`
+}
+
+// defaultScriptBudget bounds a script whose request names no timeout. Before
+// this existed a hung script held one of the five instruction workers forever,
+// and five of them wedged the whole instruction path for the node.
+const defaultScriptBudget = 15 * time.Minute
+
+// maxScriptBudget caps what a request may ask for, so a bad budget cannot
+// reintroduce the unbounded case by another route.
+const maxScriptBudget = 60 * time.Minute
+
+// scriptBudget turns the requested seconds into the window the run gets.
+func scriptBudget(seconds int) time.Duration {
+	if seconds <= 0 {
+		return defaultScriptBudget
+	}
+	budget := time.Duration(seconds) * time.Second
+	if budget > maxScriptBudget {
+		return maxScriptBudget
+	}
+	return budget
+}
+
+// scriptRun is what one foreground script run produced.
+type scriptRun struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	TimedOut bool
+}
+
+// runScriptFile runs `/bin/bash <path>` with stdout and stderr captured
+// SEPARATELY and the whole run bounded by budget.
+//
+// Setpgid plus a group kill, not a plain Cancel: bash's own death leaves its
+// children running, and a grandchild still holding the output pipes keeps Wait
+// blocked long after the budget is spent. The kill goes to -pid, which is the
+// whole process group.
+func runScriptFile(path string, budget time.Duration) scriptRun {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/bin/bash", path)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	// A grandchild that survived the group kill must not hold Wait open.
+	cmd.WaitDelay = 5 * time.Second
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	runErr := cmd.Run()
+
+	run := scriptRun{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		TimedOut: errors.Is(ctx.Err(), context.DeadlineExceeded),
+	}
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			run.ExitCode = exitErr.ExitCode()
+		} else {
+			run.ExitCode = -1
+		}
+		// A killed process reports -1, which on its own reads like "could not
+		// run". The timeout flag is what separates the two, and the reason is
+		// appended to stderr so an operator reading only the text still sees it.
+		if run.TimedOut {
+			run.ExitCode = -1
+			run.Stderr += fmt.Sprintf("\nrunos: the node agent killed this script after %s\n", budget)
+		}
+	}
+	return run
 }
 
 // buildRemoteScriptURL assembles the fetch URL from the validated script token
@@ -189,7 +290,7 @@ func HandleRunRemoteScript(b64ScriptData *pb.ToNodeAgent) (*pb.FromNodeAgent, er
 		return nil, err
 	}
 
-	var commandResponse string
+	var run scriptRun
 	if request.RunInBackground {
 		// Run argv-style in a detached scope. The temp file is intentionally NOT
 		// removed here: the background bash reads it after this handler returns.
@@ -198,22 +299,27 @@ func HandleRunRemoteScript(b64ScriptData *pb.ToNodeAgent) (*pb.FromNodeAgent, er
 			os.Remove(tmpPath)
 			return nil, err
 		}
-		commandResponse = "Script is running in the background."
+		run = scriptRun{Stdout: "Script is running in the background."}
 	} else {
-		out, runErr := exec.Command("/bin/bash", tmpPath).CombinedOutput()
+		budget := scriptBudget(request.TimeoutSeconds)
+		run = runScriptFile(tmpPath, budget)
 		os.Remove(tmpPath)
-		commandResponse = string(out)
-		if runErr != nil {
-			roslog.E("Remote script execution failed", runErr, "bytes", len(commandResponse))
+		if run.ExitCode != 0 {
+			roslog.E("Remote script execution failed", fmt.Errorf("exit code %d (timedOut=%v)", run.ExitCode, run.TimedOut),
+				"stdoutBytes", len(run.Stdout), "stderrBytes", len(run.Stderr))
 		}
 	}
 
 	// Log only metadata; the script's captured output may contain secrets and
 	// must not be persisted to the on-disk log.
-	roslog.I("Script result", "bytes", len(commandResponse))
+	roslog.I("Script result", "stdoutBytes", len(run.Stdout), "stderrBytes", len(run.Stderr),
+		"exitCode", run.ExitCode, "timedOut", run.TimedOut)
 
 	response := runRemoteScriptResponse{
-		Response: commandResponse,
+		Response: run.Stdout,
+		Stderr:   run.Stderr,
+		ExitCode: run.ExitCode,
+		TimedOut: run.TimedOut,
 	}
 
 	responseJson, err := json.Marshal(response)
