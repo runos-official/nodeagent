@@ -9,6 +9,8 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.15
+
 ### Fixed
 
 - **A script that finished right at its budget is no longer reported as a timeout** (goal 19
