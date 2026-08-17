@@ -1,9 +1,11 @@
 package commons
 
 import (
+	"errors"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,13 +23,20 @@ import (
 // Desired state has to mean desired state, or a declaration that can be toggled one way but not
 // back is not a declaration at all.
 
-// wgRoamedEndpointLiveness is how recently a peer must have completed a handshake for its
-// endpoint to count as a LIVE roamed address rather than a stale configured one.
+// wgRoamedEndpointLiveness is how recently a peer must have completed a handshake for its endpoint
+// to count as a session that still works.
 //
-// Every peer this agent sets carries persistent-keepalive 5 (see wgKeepalive), so a working
-// session re-handshakes well inside WireGuard's 120 s rekey interval and its handshake age never
-// approaches this number. A session nobody answers ages past it within one convergence pass or
-// two, which is when clearing the endpoint is the right move.
+// 180 s is WireGuard's REJECT_AFTER_TIME: past it the keypair is definitionally unusable, so an
+// endpoint that has not handshaked inside it is not carrying traffic whatever else is true. That is
+// the honest justification, and it is deliberately NOT "our keepalive keeps it fresh".
+//
+// OUR KEEPALIVE IS NOT WHAT REFRESHES THIS. `keep_key_fresh` rekeys only on the side that
+// INITIATED, and for an endpointless peer the far side is necessarily the initiator, because this
+// node has no address to dial. So our handshake age is refreshed by the far side's cadence, not by
+// our persistent-keepalive 5. A healthy session's age therefore cycles up to REKEY_AFTER_TIME
+// (120 s) and back, which is the margin this constant leaves, and it holds only while the far side
+// is a current agent. A peer that has gone quiet for other reasons is covered by the two-pass rule
+// in Plan rather than by this number.
 const wgRoamedEndpointLiveness = 180 * time.Second
 
 // WgPeer is one peer's desired configuration. An empty EndpointIP means identity only.
@@ -54,13 +63,40 @@ type WgPeerState struct {
 	LastHandshakeUnix int64
 }
 
-// isLiveRoamedEndpoint reports whether this peer's endpoint belongs to a session that is working
-// right now, which is what an endpointless peer's roamed address looks like.
-func (s WgPeerState) isLiveRoamedEndpoint(now time.Time) bool {
-	if s.Endpoint == "" || s.LastHandshakeUnix == 0 {
-		return false
+// endpointLiveness is what one reading of a peer's handshake tells us about its session.
+type endpointLiveness int
+
+const (
+	// endpointDead: no endpoint, never handshaked, or handshaked longer ago than a keypair lives.
+	endpointDead endpointLiveness = iota
+	// endpointLive: handshaked recently enough to still be carrying traffic.
+	endpointLive
+	// endpointUnmeasurable: the reading cannot be believed, so it must not be acted on either way.
+	endpointUnmeasurable
+)
+
+// liveness reports whether this peer's endpoint belongs to a session that is working right now.
+//
+// A NEGATIVE age is not "very fresh", it is a clock that moved. `wg` reports the handshake as wall
+// clock and `now` is wall clock, so an NTP step, a resumed machine or a box with a dead RTC moves
+// one without moving the other. Read as fresh it would keep a dead endpoint for ever; read as stale
+// it would wipe every live roamed endpoint on the node in a single pass, which is R8 again for all
+// peers at once. Neither is a measurement, so it is neither.
+func (s WgPeerState) liveness(now time.Time) endpointLiveness {
+	if s.Endpoint == "" {
+		return endpointDead
 	}
-	return now.Sub(time.Unix(s.LastHandshakeUnix, 0)) <= wgRoamedEndpointLiveness
+	if s.LastHandshakeUnix == 0 {
+		return endpointDead
+	}
+	age := now.Sub(time.Unix(s.LastHandshakeUnix, 0))
+	if age < 0 {
+		return endpointUnmeasurable
+	}
+	if age < wgRoamedEndpointLiveness {
+		return endpointLive
+	}
+	return endpointDead
 }
 
 // PeerConvergencePlan is what to do to the interface to reach the desired set.
@@ -72,30 +108,80 @@ type PeerConvergencePlan struct {
 	Set []WgPeer
 }
 
+// PeerMemory is what this agent remembers between convergence passes.
+//
+// IT EXISTS BECAUSE THE HANDSHAKE CANNOT ANSWER THE QUESTION ON ITS OWN, and the first version of
+// this fix pretended it could. `wg show` reports one endpoint and never says whether the kernel got
+// it from us or learned it by roaming. Liveness separates a WORKING address from a dead one, which
+// is what R8 needed, but it does not separate OURS from THEIRS. So a peer we had configured with a
+// public endpoint, re-declared as having no inbound path while that tunnel is up, reads live for
+// ever and its endpoint is never cleared: the declaration converges one way and not back, which is
+// the exact failure the header of this file was written about.
+//
+// What this agent DOES know is what it last applied. A peer whose applied endpoint was non-empty
+// and is now empty has had its declaration changed, and that clears unconditionally. A peer that
+// was already endpointless can only be holding a roamed address, and that is where liveness rules.
+//
+// In memory only, for the life of the process. After a restart nothing is remembered, and an
+// unremembered peer is treated as already-endpointless, which is the conservative direction: a
+// changed declaration then waits for the liveness rule instead of converging at once, rather than a
+// live session being torn down on every agent start.
+type PeerMemory struct {
+	mu sync.Mutex
+	// appliedEndpoint is the desired endpoint this agent last SET for each peer key.
+	appliedEndpoint map[string]string
+	// deadReadings counts consecutive passes in which a peer's endpoint read dead.
+	deadReadings map[string]int
+}
+
+// NewPeerMemory returns an empty memory. Tests build their own so no case depends on another.
+func NewPeerMemory() *PeerMemory {
+	return &PeerMemory{appliedEndpoint: map[string]string{}, deadReadings: map[string]int{}}
+}
+
+// wgDeadReadingsBeforeClearing is how many consecutive dead readings clear a roamed endpoint.
+//
+// TWO, not one, and the second one is hysteresis rather than caution. A single reading can be wrong
+// for reasons that have nothing to do with the peer: a clock that stepped, a pass that raced a
+// rekey, a far side that was briefly quiet. Acting on one costs the 30 to 70 second outage R8 was
+// filed about; waiting for a second costs one convergence interval on a declaration that is not
+// urgent, because the endpoint being cleared is one nothing is reaching anyway.
+const wgDeadReadingsBeforeClearing = 2
+
+// defaultPeerMemory is what the two production call sites share. One agent, one interface, one
+// memory.
+var defaultPeerMemory = NewPeerMemory()
+
 // PlanPeerConvergence works out how to get from the peers currently on the interface to exactly
-// the desired set, as of `now`.
+// the desired set, as of `now`, using this agent's shared memory of earlier passes.
+func PlanPeerConvergence(current map[string]WgPeerState, desired []WgPeer, now time.Time) PeerConvergencePlan {
+	return defaultPeerMemory.Plan(current, desired, now)
+}
+
+// Plan is PlanPeerConvergence against a specific memory.
 //
 // current maps each configured peer's public key to what the interface holds for it.
 //
 // CLEARING AN ENDPOINT MEANS REMOVING THE PEER AND ADDING IT BACK. WireGuard has no command that
 // unsets an endpoint: `wg set` can overwrite one, never remove one. So a peer that has an endpoint
 // today and should have none tomorrow appears in BOTH lists, deliberately. Without that, a node
-// that moved behind NAT would keep being dialled at its old address forever, which is exactly the
-// stuck-declaration case above.
+// that moved behind NAT would keep being dialled at its old address for ever.
 //
-// A LIVE ROAMED ENDPOINT IS LEFT ALONE, and that exception is the whole point of the handshake
-// field. An endpointless peer is a node with no inbound path: it dials out, and the kernel learns
-// where it dialled from. That learned address is indistinguishable from a configured one in `wg
-// show`, so the removal rule used to fire on it every single convergence pass. Measured on dev
-// 2026-08-17 with two home nodes declared no-public-ingress: the third node dropped and re-added
-// both peers roughly every three minutes, each time destroying the session and the learned
-// address, and each time taking 30 to 70 seconds to re-learn them from the far side's keepalive.
-// For that whole window the node could not START a conversation with either peer, which is a
-// control plane losing its path to two etcd members on a timer.
+// A LIVE ROAMED ENDPOINT IS LEFT ALONE, which is R8. An endpointless peer is a node with no inbound
+// path: it dials out, and the kernel learns where it dialled from. That learned address used to be
+// indistinguishable from a configured one, so the removal rule fired on it every single pass.
+// Measured on dev 2026-08-17 with two home nodes declared no-public-ingress: the third node dropped
+// and re-added both peers roughly every three minutes, each time destroying the session and the
+// learned address, and each time taking 30 to 70 seconds to re-learn them. For that whole window
+// the node could not START a conversation with either peer, which is a control plane losing its
+// path to two etcd members on a timer.
 //
 // A peer that already has the endpoint it should have is still re-set, which costs nothing: `wg
 // set` is idempotent, and the alternative is a second diffing rule that can disagree with this one.
-func PlanPeerConvergence(current map[string]WgPeerState, desired []WgPeer, now time.Time) PeerConvergencePlan {
+func (m *PeerMemory) Plan(current map[string]WgPeerState, desired []WgPeer, now time.Time) PeerConvergencePlan {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	wanted := make(map[string]WgPeer, len(desired))
 	for _, p := range desired {
 		wanted[p.PubKey] = p
@@ -114,16 +200,49 @@ func PlanPeerConvergence(current map[string]WgPeerState, desired []WgPeer, now t
 	// Peers that must lose an endpoint they currently hold.
 	for _, p := range desired {
 		if p.EndpointIP != "" {
+			delete(m.deadReadings, p.PubKey)
 			continue
 		}
 		state, configured := current[p.PubKey]
 		if !configured || state.Endpoint == "" {
+			delete(m.deadReadings, p.PubKey)
 			continue
 		}
-		if state.isLiveRoamedEndpoint(now) {
+
+		// The declaration itself changed: this agent applied an endpoint for this peer and is now
+		// being told it has none. Nothing about the current session makes that stale, so it clears
+		// at once rather than waiting for a tunnel we were told to stop using to fall over.
+		if applied, known := m.appliedEndpoint[p.PubKey]; known && applied != "" {
+			remove = append(remove, p.PubKey)
+			delete(m.deadReadings, p.PubKey)
 			continue
 		}
-		remove = append(remove, p.PubKey)
+
+		switch state.liveness(now) {
+		case endpointLive:
+			delete(m.deadReadings, p.PubKey)
+		case endpointUnmeasurable:
+			// Say nothing and change nothing. The count is left where it is so a run of bad
+			// clock readings neither clears the endpoint nor resets progress towards clearing it.
+		case endpointDead:
+			m.deadReadings[p.PubKey]++
+			if m.deadReadings[p.PubKey] >= wgDeadReadingsBeforeClearing {
+				remove = append(remove, p.PubKey)
+				delete(m.deadReadings, p.PubKey)
+			}
+		}
+	}
+
+	// Record what this pass is about to apply, and forget peers nobody asked for.
+	applied := make(map[string]string, len(desired))
+	for _, p := range desired {
+		applied[p.PubKey] = p.EndpointIP
+	}
+	m.appliedEndpoint = applied
+	for key := range m.deadReadings {
+		if _, ok := wanted[key]; !ok {
+			delete(m.deadReadings, key)
+		}
 	}
 
 	return PeerConvergencePlan{Remove: remove, Set: desired}
@@ -174,11 +293,35 @@ func ParseWgDump(out string) map[string]WgPeerState {
 // which is the safe direction: mistaking a failed read for "no peers are configured" would tear
 // down every working tunnel on the node.
 func CurrentWgPeerStates() (map[string]WgPeerState, error) {
+	// THIS OUTPUT IS SECRET. Line 1 of `wg show <iface> dump` is the interface, and its first field
+	// is the node's WireGuard PRIVATE KEY. `wg show wg0 endpoints`, which this replaced, carried no
+	// such thing. Never log it, and never put it in an error message.
 	out, err := exec.Command("wg", "show", "wg0", "dump").CombinedOutput()
 	if err != nil {
 		return map[string]WgPeerState{}, err
 	}
-	return ParseWgDump(string(out)), nil
+	peers := ParseWgDump(string(out))
+
+	// AN OUTPUT THIS PARSER DOES NOT RECOGNISE MUST NOT READ AS "NO PEERS". An empty map plans no
+	// removals, so a format change would silently retire the rule that a removed node's key stops
+	// working, and nothing would say so. Counting the lines is enough to tell "this node has no
+	// peers" from "this node has peers and none of them parsed".
+	if len(peers) == 0 && countNonEmptyLines(out) > 1 {
+		return map[string]WgPeerState{}, errors.New(
+			"wg show wg0 dump produced output this agent could not parse as peers; no peer was removed",
+		)
+	}
+	return peers, nil
+}
+
+func countNonEmptyLines(out []byte) int {
+	n := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // RemoveWgPeer drops a peer from wg0.

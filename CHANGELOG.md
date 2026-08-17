@@ -9,6 +9,33 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.18
+
+### Fixed
+
+- **The endpointless declaration converges BOTH ways again** (adversarial review of rc.17). The
+  liveness rule in rc.17 could tell a working address from a dead one, which is what R8 needed, but
+  it cannot tell an address WE configured from one the kernel learned by roaming. So a peer we had
+  configured with a public endpoint, re-declared as having no inbound path while that tunnel was up,
+  read live for ever and its endpoint was never cleared: the declaration converged one way and not
+  back, which is the failure the whole file was written about. The agent now remembers what it last
+  APPLIED per peer. A peer whose applied endpoint was non-empty and is now empty has had its
+  declaration changed and clears at once; a peer that was already endpointless can only be holding a
+  roamed address, and there liveness rules.
+- **A stepped clock no longer wipes every roamed endpoint at once.** `wg` reports the handshake as
+  wall clock and so does the agent, so an NTP step, a resumed machine or a box with a dead RTC moves
+  one without the other. A negative age is now read as unmeasurable rather than as stale, and
+  clearing a roamed endpoint takes TWO consecutive dead readings, so one bad sample cannot cost the
+  30 to 70 second outage R8 was filed about.
+- **An unparseable `wg show wg0 dump` is an error, not "this node has no peers".** An empty map plans
+  no removals, so a format change would have silently retired the rule that a removed node's key
+  stops working, with nothing to say so.
+- The liveness window is now pinned by a test that states a literal 125 s age (just past WireGuard's
+  120 s REKEY_AFTER_TIME). The rc.17 tests derived their input from the constant, so the suite stayed
+  green with the window set to ten seconds. Its comment no longer claims our own
+  persistent-keepalive refreshes the handshake: for an endpointless peer the far side is necessarily
+  the initiator, so the refresh comes from there, and 180 s is justified by REJECT_AFTER_TIME.
+
 ## v1.8.0-rc.17
 
 ### Fixed

@@ -149,7 +149,7 @@ func ParsePeerRoutes(out []byte) ([]string, error) {
 // CurrentPeerRoutes lists the peer routes on wg0 right now.
 //
 // A read failure returns an EMPTY list and the error, which plans NO removals: the same safe
-// direction as CurrentWgPeers. Mistaking a failed read for "no routes" would remove nothing
+// direction as CurrentWgPeerStates. Mistaking a failed read for "no routes" would remove nothing
 // anyway, and the adds are idempotent (`ip route replace`), so a failed read costs at most a
 // stale route that the next pass removes.
 func CurrentPeerRoutes() ([]string, error) {
