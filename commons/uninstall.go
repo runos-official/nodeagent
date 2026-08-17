@@ -99,6 +99,14 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 		"timeout 30 sh -c 'iptables -t nat -D POSTROUTING -j RUNOS-VMGRP-NAT 2>/dev/null; " +
 			"iptables -t nat -F RUNOS-VMGRP-NAT 2>/dev/null; " +
 			"iptables -t nat -X RUNOS-VMGRP-NAT 2>/dev/null' || true",
+		// The `-N` shadow chains the applier builds into and renames on a clean run. On a clean node
+		// they are already renamed to the stable names above, so these are usually no-ops; they only
+		// exist when a build failed mid-swap, and a reset must still leave the box bare.
+		"timeout 30 sh -c 'iptables -t mangle -F RUNOS-VMGRP-PRE-N 2>/dev/null; " +
+			"iptables -t mangle -X RUNOS-VMGRP-PRE-N 2>/dev/null; " +
+			"iptables -t nat -F RUNOS-VMGRP-NAT-N 2>/dev/null; " +
+			"iptables -t nat -X RUNOS-VMGRP-NAT-N 2>/dev/null; " +
+			"for b in iptables ip6tables; do $b -F RUNOS-VMGRP-IN-N 2>/dev/null; $b -X RUNOS-VMGRP-IN-N 2>/dev/null; done' || true",
 		fmt.Sprintf("rm -f %s/runos-vm-group-firewall.service || true", unitDir),
 		fmt.Sprintf("rm -f %s %s.tmp || true", applier, applier),
 		fmt.Sprintf("rm -rf %s || true", confDir),

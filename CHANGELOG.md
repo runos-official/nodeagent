@@ -9,6 +9,17 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.23
+
+### Fixed
+
+- **The uninstall removes the `-N` shadow firewall chains too** (goal 30 unit-2 review). The
+  076-vm-group-bridge applier now rebuilds its chains under a `-N` shadow name and renames them into
+  place atomically, so a reconcile never leaves a window with no metadata/anti-spoof/cross-pool
+  drops. On a clean node the shadow is already renamed away, but a build that failed mid-swap leaves
+  a `RUNOS-VMGRP-*-N` chain behind; the uninstall now flushes and removes those so a reset still
+  leaves the box bare.
+
 ## v1.8.0-rc.22
 
 ### Fixed
