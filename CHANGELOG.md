@@ -9,6 +9,16 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.21
+
+### Fixed
+
+- **The first `GetInstallCommands` after a wait gets 90 seconds, not 30** (goal 30, G30-F1 review).
+  When a second control plane waits for the first and the first turns ready, the very next call is the
+  expensive one: nodeward fetches the join command from the just-ready control plane. A 30-second
+  deadline there could fail the install on attempt 1 with a message claiming five attempts, on exactly
+  the happy path the wait exists to serve.
+
 ## v1.8.0-rc.20
 
 ### Fixed
