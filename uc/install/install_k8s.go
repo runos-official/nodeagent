@@ -101,8 +101,11 @@ func K8s() error {
 	waitAnnounced := false
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// One deadline per call: a wait can outlive any single deadline by design.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// One deadline per call: a wait can outlive any single deadline by design. 90 s, not 30:
+		// the FIRST call after a wait ends is the expensive one, because nodeward then fetches the
+		// join command from the just-ready control plane, and a 30 s deadline there failed the
+		// install on the happy path the wait exists to serve (review defect 8).
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		res, err = c.GetInstallCommands(ctx, request)
 		cancel()
 		if err == nil {
