@@ -9,6 +9,24 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.20
+
+### Fixed
+
+- **Two control planes may now be started together on an empty cluster** (goal 30, G30-F1, with
+  nodeward 1.6.0-rc.35). Until now the first node was elected by counting READY control planes, so
+  two machines that registered before either had finished installing were BOTH told they were first,
+  both ran `kubeadm init`, and RunOS reported one healthy two-node cluster that was two clusters with
+  two CAs (measured on ede 2026-08-17). Nodeward now hands the role to exactly one machine. The agent's
+  half: a node whose install finds no ready control plane to join WAITS for one, asking again every
+  15 seconds for up to 30 minutes, when nodeward says so with a `FailedPrecondition` whose message
+  starts `WAIT_FOR_CONTROL_PLANE:`; every other error keeps its old meaning. And reporting
+  `INITIALIZING_NEW_CLUSTER`, seconds before `kubeadm init`, is now a question: if nodeward answers
+  `FIRST_NODE_CLAIM_RELEASED` (the role went to another machine while this install looked dead) the
+  install stops without initialising, and if nodeward cannot be reached for two minutes it also stops,
+  because starting a cluster on a guess is the defect being removed. Re-running `sudo runos install`
+  then joins the cluster the other machine built.
+
 ## v1.8.0-rc.19
 
 ### Fixed

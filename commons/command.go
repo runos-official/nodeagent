@@ -115,6 +115,32 @@ func ProcessInstallCommandsStatusAware(commandList *l2sec.InstallCommandList) er
 			// Update the progress bar status
 			roslog.UpdateInstallStatus(statusMsg)
 
+			// THE ONE STATUS THAT IS A QUESTION, NOT A REPORT (goal 30, G30-F1). Reporting
+			// INITIALIZING_NEW_CLUSTER asks nodeward whether this node still holds the cluster's
+			// first-node role, seconds before `kubeadm init` runs. Nodeward refuses with a
+			// FailedPrecondition when the role has been given to another machine (this install
+			// looked dead for longer than nodeward's bound, or reported a failure), and then this
+			// node MUST NOT initialise: it would build a second cluster under the same id. That
+			// refusal aborts the install. Nodeward being unreachable is retried for a while and
+			// then also aborts, because starting a cluster on a guess is the defect this exists to
+			// remove; the remedy is to run the install again.
+			if strings.EqualFold(statusMsg, initialisingNewClusterStatus) {
+				if err := confirmFirstNodeClaim(backend.UpdateStatus); err != nil {
+					roslog.FinishInstallProgress(false)
+					roslog.InstallError(err.Error())
+					if err2 := backend.UpdateStatus("INSTALL_ERROR"); err2 != nil {
+						roslog.InstallError(fmt.Sprintf("Failed to update error status: %v", err2))
+					}
+					if err2 := backend.AddNodelogStructured(1, "NodeInstallationFailure", err.Error(),
+						"FIRST_NODE_CLAIM_NOT_CONFIRMED", "This node could not confirm with nodeward that it still holds the cluster's first-node role.",
+						"Run `sudo runos install` again. If another machine now holds the role, this one joins it as a control plane.", ""); err2 != nil {
+						roslog.InstallError(fmt.Sprintf("Failed to log to Nodeward: %v", err2))
+					}
+					return err
+				}
+				continue
+			}
+
 			// Update status back to Nodeward
 			if err := backend.UpdateStatus(statusMsg); err != nil {
 				roslog.InstallWarning(fmt.Sprintf("Failed to update status to Nodeward: %v", err))
