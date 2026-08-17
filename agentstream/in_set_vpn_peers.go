@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/runos-official/nodeagent/commons"
 	"github.com/runos-official/nodeagent/config"
@@ -105,12 +106,12 @@ func setVpnPeers(request vpnPeerRequest) {
 	// A read failure yields an empty map, which plans NO removals. That is the safe direction:
 	// treating "could not read" as "no peers are configured" would tear down every working tunnel
 	// on this node.
-	current, err := commons.CurrentWgPeers()
+	current, err := commons.CurrentWgPeerStates()
 	if err != nil {
 		roslog.E("Could not read the current WireGuard peers, applying without removals", err)
 	}
 
-	plan := commons.PlanPeerConvergence(current, desired)
+	plan := commons.PlanPeerConvergence(current, desired, time.Now())
 
 	for _, pubKey := range plan.Remove {
 		if err := commons.RemoveWgPeer(pubKey); err != nil {

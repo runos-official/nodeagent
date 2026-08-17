@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/runos-official/nodeagent/commons"
 	pb "github.com/runos-official/nodeagent/l2sec"
@@ -34,11 +35,11 @@ func setPeers(response *pb.ManualSyncResponse) int {
 	}
 
 	// A read failure yields an empty map, which plans NO removals: the safe direction.
-	current, err := commons.CurrentWgPeers()
+	current, err := commons.CurrentWgPeerStates()
 	if err != nil {
 		roslog.E("Could not read the current WireGuard peers, applying without removals", err)
 	}
-	plan := commons.PlanPeerConvergence(current, desired)
+	plan := commons.PlanPeerConvergence(current, desired, time.Now())
 
 	for _, pubKey := range plan.Remove {
 		if err := commons.RemoveWgPeer(pubKey); err != nil {

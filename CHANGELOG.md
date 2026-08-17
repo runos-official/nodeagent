@@ -9,6 +9,31 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.17
+
+### Fixed
+
+- **A peer declared to have no inbound path no longer loses its live address on every peer sync**
+  (goal 19 prod-readiness round, finding R8). WireGuard reports one endpoint field and never says
+  whether the kernel got it from us or learned it from an inbound packet. The convergence plan
+  read that one field, saw an address on a peer that is supposed to have none, and removed and
+  re-added the peer to clear it. For a NAT'd peer that address is the whole point: the peer dials
+  out and the far side learns where from, so the rule fired on a WORKING session every single
+  pass.
+  - Measured on cluster ede on 2026-08-17, two home nodes declared `noPublicIngress` and a third
+    node in Hetzner: over 17.7 minutes the third node held no endpoint for its two peers in 23 of
+    62 samples (37 % of the time), across 6 and 7 separate wipe episodes. Each episode destroyed
+    the session and took 30 to 70 seconds to re-learn the address from the far side's keepalive,
+    and for that whole window the node could not START a conversation with either peer. Both peers
+    were etcd members of the same control plane.
+  - `PlanPeerConvergence` now also reads each peer's LAST HANDSHAKE, and clears an endpoint only
+    when its session is not live. A peer that has never handshaken, or whose handshake is older
+    than 180 s, is still cleared, so a node that genuinely moved behind NAT still converges; a
+    keepalive-driven session (every peer carries `persistent-keepalive 5`) never approaches that
+    age, so a roamed address is left alone.
+  - `CurrentWgPeers` becomes `CurrentWgPeerStates` and reads `wg show wg0 dump` rather than
+    `wg show wg0 endpoints`, because the endpoints view does not carry the handshake time.
+
 ## v1.8.0-rc.16
 
 ### Fixed
