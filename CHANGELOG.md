@@ -9,7 +9,15 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
-## v1.8.0-rc.21
+## v1.8.0-rc.22
+
+### Fixed
+
+- **The uninstall removes the pool-egress NAT chain it now installs** (goal 30,
+  guest-egress-without-the-pod-nic). Conductor's 076-vm-group-bridge gained a `nat POSTROUTING`
+  chain (`RUNOS-VMGRP-NAT`) that masquerades guest pool egress; the uninstall now tears it down with
+  the other RUNOS-VMGRP chains, so a cluster reset leaves the box bare. Same rule, same shape as the
+  mangle/filter chains: whatever RunOS installs on a node, its removal is written in the same change.
 
 ### Fixed
 

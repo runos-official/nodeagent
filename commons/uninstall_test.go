@@ -193,6 +193,9 @@ func TestVmGroupFirewallCleanupSteps_TearsDownEveryChainItInstalls(t *testing.T)
 		"$b -X RUNOS-VMGRP-IN",
 		"ip6tables",
 		"iptables -D FORWARD -j RUNOS-VMGRP-FWD",
+		// The nat POSTROUTING chain that masquerades pool egress (goal 30).
+		"iptables -t nat -D POSTROUTING -j RUNOS-VMGRP-NAT",
+		"iptables -t nat -X RUNOS-VMGRP-NAT",
 		"systemctl disable --now runos-vm-group-firewall.service",
 	} {
 		if !strings.Contains(joined, want) {

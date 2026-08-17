@@ -93,6 +93,12 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 		"timeout 30 sh -c 'iptables -D FORWARD -j RUNOS-VMGRP-FWD 2>/dev/null; " +
 			"iptables -F RUNOS-VMGRP-FWD 2>/dev/null; " +
 			"iptables -X RUNOS-VMGRP-FWD 2>/dev/null' || true",
+		// The nat POSTROUTING chain that masquerades pool egress (goal 30,
+		// guest-egress-without-the-pod-nic). Same rule as the fence chains: whatever RunOS installs on
+		// a node, its removal is written in the same change, so a reset leaves the box bare.
+		"timeout 30 sh -c 'iptables -t nat -D POSTROUTING -j RUNOS-VMGRP-NAT 2>/dev/null; " +
+			"iptables -t nat -F RUNOS-VMGRP-NAT 2>/dev/null; " +
+			"iptables -t nat -X RUNOS-VMGRP-NAT 2>/dev/null' || true",
 		fmt.Sprintf("rm -f %s/runos-vm-group-firewall.service || true", unitDir),
 		fmt.Sprintf("rm -f %s %s.tmp || true", applier, applier),
 		fmt.Sprintf("rm -rf %s || true", confDir),
