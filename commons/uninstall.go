@@ -24,6 +24,14 @@ const kubeletLazyUnmount = `awk "\$2 ~ /^\/var\/lib\/kubelet/ {print \$2}" /proc
 // vmGroupBridgeCleanupSteps so the test can drive the real removal against a fixture tree.
 const networkdUnitDir = "/etc/systemd/network"
 
+// Where conductor's 076-vm-group-bridge puts the VM group SEGMENT FIREWALL. Parameters of
+// vmGroupFirewallCleanupSteps for the same reason: so its test can drive the real removal.
+const (
+	segmentFirewallConfDir = "/etc/runos/vm-group-firewall"
+	segmentFirewallApplier = "/usr/local/sbin/runos-vm-group-firewall"
+	segmentFirewallUnitDir = "/etc/systemd/system"
+)
+
 // vmGroupBridgeCleanupSteps removes the VM group pool bridges this node carries.
 //
 // Conductor's script 076-vm-group-bridge persists one bridge per VM group as
@@ -49,6 +57,46 @@ func vmGroupBridgeCleanupSteps(unitDir string) []string {
 			`cut -d@ -f1 | grep "^rvg" || true); do ip link set "$l" down || true; ` +
 			`ip link delete "$l" || true; done' || true`,
 		"timeout 30 networkctl reload || true",
+	}
+}
+
+// vmGroupFirewallCleanupSteps removes the VM group segment firewall this node carries.
+//
+// Conductor's 076-vm-group-bridge installs three things a node keeps by itself: a conf per group in
+// /etc/runos/vm-group-firewall, an applier in /usr/local/sbin, and a oneshot unit that re-applies
+// the rules at boot. It also installs iptables chains jumped to from mangle PREROUTING and filter
+// INPUT, on IPv4 and IPv6.
+//
+// MEASURED on 2026-08-17, immediately after writing the thing: a full cluster reset left the unit
+// ENABLED, the applier in place and both chains installed on every host, on boxes the reset had
+// otherwise returned to bare. That is the same shape as the bridge gap above, found the same way,
+// two rounds later. The rule this exists to enforce: anything RunOS puts on a node gets its removal
+// written in the same change, and the uninstall is the one place that can be checked.
+//
+// The chains are torn down BEFORE the files, so a boot that races the uninstall cannot re-apply
+// from a conf that is about to disappear. Every step is scoped to the RUNOS-VMGRP names and the
+// RunOS paths: a wider flush would take cilium's and kube-proxy's chains with it.
+func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
+	return []string{
+		"timeout 30 systemctl disable --now runos-vm-group-firewall.service || true",
+		// mangle first, then filter, on both address families. `-D` on an absent jump and `-X` on
+		// an absent chain both fail harmlessly, which is why each is guarded.
+		"timeout 30 sh -c 'iptables -t mangle -D PREROUTING -j RUNOS-VMGRP-PRE 2>/dev/null; " +
+			"iptables -t mangle -F RUNOS-VMGRP-PRE 2>/dev/null; " +
+			"iptables -t mangle -X RUNOS-VMGRP-PRE 2>/dev/null' || true",
+		"timeout 30 sh -c 'for b in iptables ip6tables; do " +
+			"$b -D INPUT -j RUNOS-VMGRP-IN 2>/dev/null; " +
+			"$b -F RUNOS-VMGRP-IN 2>/dev/null; " +
+			"$b -X RUNOS-VMGRP-IN 2>/dev/null; done' || true",
+		// The FORWARD chain an earlier version of the fence used. Removed here too, because a node
+		// provisioned before the hook moved still carries it.
+		"timeout 30 sh -c 'iptables -D FORWARD -j RUNOS-VMGRP-FWD 2>/dev/null; " +
+			"iptables -F RUNOS-VMGRP-FWD 2>/dev/null; " +
+			"iptables -X RUNOS-VMGRP-FWD 2>/dev/null' || true",
+		fmt.Sprintf("rm -f %s/runos-vm-group-firewall.service || true", unitDir),
+		fmt.Sprintf("rm -f %s %s.tmp || true", applier, applier),
+		fmt.Sprintf("rm -rf %s || true", confDir),
+		"timeout 30 systemctl daemon-reload || true",
 	}
 }
 
@@ -181,6 +229,15 @@ func Uninstall(full bool) error {
 	// `systemctl daemon-reload` does not do.
 	roslog.Print("Removing VM group pool bridges... ")
 	for _, s := range vmGroupBridgeCleanupSteps(networkdUnitDir) {
+		step(s)
+	}
+	roslog.Println("done")
+
+	// --- VM group segment firewall (best-effort) ---------------------------
+	// After the bridges, because the rules name those bridges: tearing the fence down first would
+	// leave a window where the segments exist and nothing fences them.
+	roslog.Print("Removing VM group segment firewall... ")
+	for _, s := range vmGroupFirewallCleanupSteps(segmentFirewallConfDir, segmentFirewallApplier, segmentFirewallUnitDir) {
 		step(s)
 	}
 	roslog.Println("done")

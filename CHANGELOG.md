@@ -9,6 +9,21 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.19
+
+### Fixed
+
+- **The uninstall removes the VM group segment firewall it was leaving behind.** Conductor's
+  076-vm-group-bridge installs a conf per group, an applier, a boot unit and iptables chains jumped
+  to from mangle PREROUTING and filter INPUT on both address families. Measured 2026-08-17,
+  immediately after that fence was written: a full cluster reset left the unit ENABLED, the applier
+  in place and both chains installed on every host, on boxes the reset had otherwise returned to
+  bare. Same shape as the rvg bridge gap (R4) two rounds earlier, found the same way. The chains go
+  before the files, so a boot racing the uninstall cannot re-apply from a conf that is about to
+  disappear, and every step names the RUNOS-VMGRP chains explicitly so a builtin can never be
+  flushed. The FORWARD chain an earlier version of the fence used is torn down too, for nodes
+  provisioned before the hook moved.
+
 ## v1.8.0-rc.18
 
 ### Fixed

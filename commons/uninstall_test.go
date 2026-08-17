@@ -128,3 +128,113 @@ func TestVmGroupBridgeCleanupSteps_ReloadsNetworkd(t *testing.T) {
 		t.Errorf("expected a networkctl reload, got:\n%s", joined)
 	}
 }
+
+// The VM group SEGMENT FIREWALL, which conductor's 076-vm-group-bridge installs onto a node: a conf
+// per group, an applier, a boot unit, and iptables chains on both address families.
+//
+// MEASURED 2026-08-17, immediately after that fence was written: a full cluster reset left the unit
+// enabled, the applier in place and both chains installed on every host, on boxes the reset had
+// otherwise returned to bare. Same shape as the pool-bridge gap two rounds earlier. Anything RunOS
+// puts on a node needs its removal written in the same change.
+
+func TestVmGroupFirewallCleanupSteps_RemovesTheFilesItOwns(t *testing.T) {
+	root := t.TempDir()
+	confDir := filepath.Join(root, "conf")
+	unitDir := filepath.Join(root, "units")
+	sbin := filepath.Join(root, "sbin")
+	for _, d := range []string{confDir, unitDir, sbin} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("fixture dir failed: %v", err)
+		}
+	}
+	applier := filepath.Join(sbin, "runos-vm-group-firewall")
+	unit := filepath.Join(unitDir, "runos-vm-group-firewall.service")
+	// A .tmp is what an interrupted atomic write leaves; it must go too.
+	files := []string{applier, applier + ".tmp", unit,
+		filepath.Join(confDir, "rvgaaa.conf"), filepath.Join(confDir, "rvgzzz.conf")}
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+			t.Fatalf("fixture write failed: %v", err)
+		}
+	}
+	// A neighbour that must survive: the cleanup is scoped to what RunOS owns.
+	keep := filepath.Join(unitDir, "some-other.service")
+	if err := os.WriteFile(keep, []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("fixture write failed: %v", err)
+	}
+
+	for _, s := range vmGroupFirewallCleanupSteps(confDir, applier, unitDir) {
+		runStep(t, s, "")
+	}
+
+	for _, f := range files {
+		if _, err := os.Stat(f); !os.IsNotExist(err) {
+			t.Errorf("%s should have been removed, stat err = %v", f, err)
+		}
+	}
+	if _, err := os.Stat(confDir); !os.IsNotExist(err) {
+		t.Errorf("the conf directory should have been removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("a unit RunOS does not own was removed: %v", err)
+	}
+}
+
+func TestVmGroupFirewallCleanupSteps_TearsDownEveryChainItInstalls(t *testing.T) {
+	// Both address families, both hooks, and the FORWARD chain an earlier version of the fence
+	// used, because a node provisioned before the hook moved still carries it.
+	joined := strings.Join(vmGroupFirewallCleanupSteps("/etc/runos/vm-group-firewall",
+		"/usr/local/sbin/runos-vm-group-firewall", "/etc/systemd/system"), "\n")
+
+	for _, want := range []string{
+		"iptables -t mangle -D PREROUTING -j RUNOS-VMGRP-PRE",
+		"iptables -t mangle -X RUNOS-VMGRP-PRE",
+		"$b -D INPUT -j RUNOS-VMGRP-IN",
+		"$b -X RUNOS-VMGRP-IN",
+		"ip6tables",
+		"iptables -D FORWARD -j RUNOS-VMGRP-FWD",
+		"systemctl disable --now runos-vm-group-firewall.service",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("cleanup does not tear down %q", want)
+		}
+	}
+}
+
+func TestVmGroupFirewallCleanupSteps_NeverFlushesAChainItDoesNotOwn(t *testing.T) {
+	// A bare `-F` or a flush of a builtin would take cilium's and kube-proxy's rules with it, and
+	// the node would lose its own overlay to clean up a VM fence.
+	for _, s := range vmGroupFirewallCleanupSteps("/etc/runos/vm-group-firewall",
+		"/usr/local/sbin/runos-vm-group-firewall", "/etc/systemd/system") {
+		// The builtins, by name. `-F RUNOS-VMGRP-*` is the point of the step, so the check is on
+		// which chain is named rather than on the flag.
+		for _, builtin := range []string{"PREROUTING", "INPUT", "FORWARD", "OUTPUT", "POSTROUTING"} {
+			for _, flag := range []string{"-F ", "-X "} {
+				if strings.Contains(s, flag+builtin) {
+					t.Errorf("step %ss the builtin chain %s, which is not RunOS's to touch: %s", flag, builtin, s)
+				}
+			}
+		}
+	}
+}
+
+func TestVmGroupFirewallCleanupSteps_TearsDownRulesBeforeRemovingConfs(t *testing.T) {
+	// Otherwise a boot that races the uninstall re-applies from a conf that is about to vanish.
+	steps := vmGroupFirewallCleanupSteps("/etc/runos/vm-group-firewall",
+		"/usr/local/sbin/runos-vm-group-firewall", "/etc/systemd/system")
+	lastChain, firstRemove := -1, len(steps)
+	for i, s := range steps {
+		if strings.Contains(s, "RUNOS-VMGRP") {
+			lastChain = i
+		}
+		if strings.HasPrefix(s, "rm ") && firstRemove == len(steps) {
+			firstRemove = i
+		}
+	}
+	if lastChain == -1 || firstRemove == len(steps) {
+		t.Fatal("expected both chain teardown and file removal steps")
+	}
+	if lastChain > firstRemove {
+		t.Errorf("chain teardown (step %d) must precede file removal (step %d)", lastChain, firstRemove)
+	}
+}
