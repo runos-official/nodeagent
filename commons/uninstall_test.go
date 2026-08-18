@@ -196,6 +196,10 @@ func TestVmGroupFirewallCleanupSteps_TearsDownEveryChainItInstalls(t *testing.T)
 		// The nat POSTROUTING chain that masquerades pool egress (goal 30).
 		"iptables -t nat -D POSTROUTING -j RUNOS-VMGRP-NAT",
 		"iptables -t nat -X RUNOS-VMGRP-NAT",
+		// The nat PREROUTING chain that DNATs an assigned address to a VM (goal 30), and its shadow.
+		"iptables -t nat -D PREROUTING -j RUNOS-VMGRP-DNAT",
+		"iptables -t nat -X RUNOS-VMGRP-DNAT",
+		"iptables -t nat -X RUNOS-VMGRP-DNAT-N",
 		"systemctl disable --now runos-vm-group-firewall.service",
 	} {
 		if !strings.Contains(joined, want) {
@@ -239,5 +243,56 @@ func TestVmGroupFirewallCleanupSteps_TearsDownRulesBeforeRemovingConfs(t *testin
 	}
 	if lastChain > firstRemove {
 		t.Errorf("chain teardown (step %d) must precede file removal (step %d)", lastChain, firstRemove)
+	}
+}
+
+func TestVmGroupFirewallCleanupSteps_ReleasesTheHeldAddressesBeforeRemovingTheRecord(t *testing.T) {
+	// 077-vm-address-binding (goal 30, associate-and-disassociate) holds an operator-assigned address
+	// on the WAN interface for an onlink binding and records `WAN IP` in .held-addresses. The address
+	// does not go with the conf dir: left on the interface after the DNAT is torn down, the host
+	// itself answers on a VM's public address. The file is the only record of which addresses are
+	// RunOS's, so it is read BEFORE the dir is removed and nothing else on the interface is touched.
+	root := t.TempDir()
+	confDir := filepath.Join(root, "conf")
+	bin := filepath.Join(root, "bin")
+	for _, d := range []string{confDir, bin} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("fixture dir failed: %v", err)
+		}
+	}
+	held := filepath.Join(confDir, ".held-addresses")
+	if err := os.WriteFile(held, []byte("eth0 203.0.113.10\neth1 203.0.113.11\n\n"), 0o644); err != nil {
+		t.Fatalf("fixture write failed: %v", err)
+	}
+	log := filepath.Join(root, "ip.log")
+	fakeIP := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + log + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "ip"), []byte(fakeIP), 0o755); err != nil {
+		t.Fatalf("fixture write failed: %v", err)
+	}
+	// A stand-in for `timeout`, which macOS does not ship; it drops the duration and runs the rest.
+	if err := os.WriteFile(filepath.Join(bin, "timeout"), []byte("#!/bin/sh\nshift\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatalf("fixture write failed: %v", err)
+	}
+
+	steps := vmGroupFirewallCleanupSteps(confDir, filepath.Join(root, "applier"), filepath.Join(root, "units"))
+	for _, s := range steps {
+		runStep(t, s, bin)
+	}
+
+	out, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("the fake ip was never called, so no held address was released: %v", err)
+	}
+	for _, want := range []string{"addr del 203.0.113.10/32 dev eth0", "addr del 203.0.113.11/32 dev eth1"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("held address not released, want %q in:\n%s", want, out)
+		}
+	}
+	// Two addresses, two calls: nothing else on the interface is touched.
+	if n := strings.Count(string(out), "addr del"); n != 2 {
+		t.Errorf("expected exactly 2 address releases, got %d:\n%s", n, out)
+	}
+	if _, err := os.Stat(confDir); !os.IsNotExist(err) {
+		t.Errorf("the conf directory (and its held file) should have been removed, stat err = %v", err)
 	}
 }

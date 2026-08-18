@@ -9,6 +9,17 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.26
+
+### Fixed
+
+- **The uninstall removes the assigned-address machinery too** (goal 30, associate-and-disassociate).
+  Conductor's 076-vm-group-bridge applier now also writes a `RUNOS-VMGRP-DNAT` chain in nat
+  PREROUTING (assigned address -> the VM's pool address) and, for on-link addresses, holds the
+  address on the WAN interface, recording it in `/etc/runos/vm-group-firewall/.held-addresses`.
+  The uninstall releases those addresses and removes the chain and its shadow with the other
+  RUNOS-VMGRP chains, so a cluster reset still leaves the box bare.
+
 ## v1.8.0-rc.25
 
 ### Fixed

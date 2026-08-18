@@ -64,8 +64,10 @@ func vmGroupBridgeCleanupSteps(unitDir string) []string {
 //
 // Conductor's 076-vm-group-bridge installs three things a node keeps by itself: a conf per group in
 // /etc/runos/vm-group-firewall, an applier in /usr/local/sbin, and a oneshot unit that re-applies
-// the rules at boot. It also installs iptables chains jumped to from mangle PREROUTING and filter
-// INPUT, on IPv4 and IPv6.
+// the rules at boot. It also installs iptables chains jumped to from mangle PREROUTING, filter
+// INPUT (IPv4 and IPv6), nat POSTROUTING and nat PREROUTING, and for an operator-assigned VM address
+// (077-vm-address-binding, goal 30) it holds that address on the WAN interface and records it in
+// .held-addresses in the same conf dir.
 //
 // MEASURED on 2026-08-17, immediately after writing the thing: a full cluster reset left the unit
 // ENABLED, the applier in place and both chains installed on every host, on boxes the reset had
@@ -99,6 +101,19 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 		"timeout 30 sh -c 'iptables -t nat -D POSTROUTING -j RUNOS-VMGRP-NAT 2>/dev/null; " +
 			"iptables -t nat -F RUNOS-VMGRP-NAT 2>/dev/null; " +
 			"iptables -t nat -X RUNOS-VMGRP-NAT 2>/dev/null' || true",
+		// The nat PREROUTING chain that DNATs an operator-assigned address to a VM's pool address
+		// (goal 30, associate-and-disassociate). Same rule again.
+		"timeout 30 sh -c 'iptables -t nat -D PREROUTING -j RUNOS-VMGRP-DNAT 2>/dev/null; " +
+			"iptables -t nat -F RUNOS-VMGRP-DNAT 2>/dev/null; " +
+			"iptables -t nat -X RUNOS-VMGRP-DNAT 2>/dev/null' || true",
+		// The assigned addresses the applier put on the WAN interface for onlink bindings, recorded
+		// as `WAN IP` lines in .held-addresses. Released BEFORE the conf dir goes, because the file
+		// is the only record of which addresses on the interface are RunOS's: after the DNAT above is
+		// gone, an address left behind delivers the internet's packets for a VM to the host itself.
+		// Read line by line and never globbed, so nothing but the listed pairs is touched.
+		fmt.Sprintf("timeout 30 sh -c 'f=%s/.held-addresses; [ -f \"$f\" ] || exit 0; "+
+			"while read -r wan addr; do [ -n \"$wan\" ] && [ -n \"$addr\" ] || continue; "+
+			"ip addr del \"$addr/32\" dev \"$wan\" 2>/dev/null; done < \"$f\"' || true", confDir),
 		// The `-N` shadow chains the applier builds into and renames on a clean run. On a clean node
 		// they are already renamed to the stable names above, so these are usually no-ops; they only
 		// exist when a build failed mid-swap, and a reset must still leave the box bare.
@@ -106,6 +121,8 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 			"iptables -t mangle -X RUNOS-VMGRP-PRE-N 2>/dev/null; " +
 			"iptables -t nat -F RUNOS-VMGRP-NAT-N 2>/dev/null; " +
 			"iptables -t nat -X RUNOS-VMGRP-NAT-N 2>/dev/null; " +
+			"iptables -t nat -F RUNOS-VMGRP-DNAT-N 2>/dev/null; " +
+			"iptables -t nat -X RUNOS-VMGRP-DNAT-N 2>/dev/null; " +
 			"for b in iptables ip6tables; do $b -F RUNOS-VMGRP-IN-N 2>/dev/null; $b -X RUNOS-VMGRP-IN-N 2>/dev/null; done' || true",
 		fmt.Sprintf("rm -f %s/runos-vm-group-firewall.service || true", unitDir),
 		fmt.Sprintf("rm -f %s %s.tmp || true", applier, applier),
