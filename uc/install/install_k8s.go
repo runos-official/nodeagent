@@ -63,6 +63,19 @@ func decideWait(waited, bound time.Duration) waitVerdict {
 	return waitAgain
 }
 
+// reportInstallError tells Nodeward this install is over, when it dies BEFORE a command list was
+// ever fetched (goal 30, G30-F3). The command runner reports INSTALL_ERROR when a command fails,
+// but a fetch that fails or a wait that gives up happens before any command runs, so the node sat
+// at not_installed with a dead installer: conductor's provisioning job could not fast-fail on it
+// and waited out its whole readiness clock, and a first-node claim held by such a node could not
+// expire on failure. Best-effort: the status is a courtesy to the callers, the error is returned
+// either way.
+var reportInstallError = func() {
+	if err := backend.UpdateStatus("INSTALL_ERROR"); err != nil {
+		roslog.W("Could not report INSTALL_ERROR to Nodeward", err)
+	}
+}
+
 // K8s installs Kubernetes on this node by fetching and running the install
 // command list from Nodeward.
 func K8s() error {
@@ -137,6 +150,7 @@ func K8s() error {
 			}
 			if decideWait(waited, waitForControlPlaneBound) == waitGiveUp {
 				roslog.E("Gave up waiting for a control plane", err, "waited", waited)
+				reportInstallError()
 				return fmt.Errorf("waited %s for a control plane to join and none became ready. Nodeward's last word: %s", waited, reason)
 			}
 			time.Sleep(waitForControlPlanePoll)
@@ -148,6 +162,7 @@ func K8s() error {
 		// (never panic) so the install exits non-zero with an actionable message
 		// instead of dumping a Go stack trace under the systemd service.
 		roslog.E("Error executing GetInstallCommands", err, "attempt", attempt)
+		reportInstallError()
 		return fmt.Errorf("could not fetch install commands from Nodeward after %d attempts: %w (check connectivity to Nodeward operations channel on TCP 9192 and that the node is registered)", maxRetries, err)
 	}
 	if !waitStarted.IsZero() {

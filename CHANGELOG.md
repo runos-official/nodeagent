@@ -9,6 +9,18 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.24
+
+### Fixed
+
+- **An install that dies before it fetches its command list now reports `INSTALL_ERROR`** (goal 30,
+  G30-F3). The command runner already reports it when a command fails, but a fetch that fails after
+  its retries, or a wait for a control plane that gives up, happens before any command runs, so the
+  node stayed at `not_installed` with a dead installer: the provisioning job upstream could not
+  fast-fail on it and waited out its whole readiness clock, and a first-node claim held by such a
+  node could not expire on failure. Best-effort; the install still exits non-zero with the same
+  message either way.
+
 ## v1.8.0-rc.23
 
 ### Fixed
