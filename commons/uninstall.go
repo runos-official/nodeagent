@@ -137,7 +137,11 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 		// chains in an arbitrary order, and `-X` refuses a chain another chain still jumps to, so a
 		// per-machine chain reached before the dispatch chain would survive the run. Flushing the
 		// dispatch chain removes every jump into the per-machine chains, and then all of them delete.
+		// BOTH JUMPS GO: the applier hooks FORWARD to the `-N` SHADOW first and renames it to the
+		// stable name on a clean swap, so a run that died mid-swap leaves `-j RUNOS-VMFW-N` in FORWARD.
+		// Deleting only the stable jump left that one behind, and `-X` then refused the chain it names.
 		"timeout 30 sh -c 'iptables -D FORWARD -j RUNOS-VMFW 2>/dev/null; " +
+			"iptables -D FORWARD -j RUNOS-VMFW-N 2>/dev/null; " +
 			"cs=$(iptables -S 2>/dev/null | awk \"/^-N RUNOS-VMFW/{print \\$2}\"); " +
 			"for c in $cs; do iptables -F \"$c\" 2>/dev/null; done; " +
 			"for c in $cs; do iptables -X \"$c\" 2>/dev/null; done' || true",

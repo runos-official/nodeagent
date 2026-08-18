@@ -9,6 +9,15 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.29
+
+### Fixed
+
+- **The uninstall removes the firewall dispatch's SHADOW jump too** (goal 30 unit-8 review). A
+  rename that failed mid-swap leaves `-j RUNOS-VMFW-N` in FORWARD, and the chain's `-X` then
+  refuses because it is still referenced, so an uninstalled node kept a live customer-firewall
+  chain. Both jumps are removed now.
+
 ## v1.8.0-rc.28
 
 ### Fixed

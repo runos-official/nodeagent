@@ -330,7 +330,7 @@ func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing
 	fake := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> " + log + "\n" +
 		"case \"$1\" in -S) printf '%s\\n' " +
-		"'-N CILIUM_FORWARD' '-N RUNOS-VMFW' '-N RUNOS-VMFW-vm1abc-IN' '-N RUNOS-VMFW-vm1abc-OUT' " +
+		"'-N CILIUM_FORWARD' '-N RUNOS-VMFW' '-N RUNOS-VMFW-N' '-N RUNOS-VMFW-vm1abc-IN' '-N RUNOS-VMFW-vm1abc-OUT' " +
 		"'-N RUNOS-VMFW-vm2def-IN-N' '-N KUBE-FORWARD' ;; esac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "iptables"), []byte(fake), 0o755); err != nil {
 		t.Fatalf("fixture write failed: %v", err)
@@ -358,6 +358,12 @@ func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing
 	for _, want := range []string{
 		// The FORWARD jump first, so nothing is jumping into a chain being deleted.
 		"-D FORWARD -j RUNOS-VMFW",
+		// AND the shadow jump. A build that died mid-swap leaves FORWARD pointing at RUNOS-VMFW-N,
+		// which is what the applier hooks first and renames only on a clean swap. Without this the
+		// jump survived the reset and `-X RUNOS-VMFW-N` was refused, so the chain did too.
+		"-D FORWARD -j RUNOS-VMFW-N",
+		"-F RUNOS-VMFW-N",
+		"-X RUNOS-VMFW-N",
 		"-F RUNOS-VMFW",
 		"-X RUNOS-VMFW",
 		"-F RUNOS-VMFW-vm1abc-IN",
