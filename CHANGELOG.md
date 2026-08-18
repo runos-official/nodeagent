@@ -9,6 +9,15 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.25
+
+### Fixed
+
+- **A transient error fetching the install command list is retried, not fatal** (goal 30, G30-F3
+  review). Since rc.24 a fetch that fails reports `INSTALL_ERROR`, so a nodeward restart
+  (`Unavailable`) or a slow call (`DeadlineExceeded`) must not reach that path when a retry would
+  have carried it through. Both are now retried with the same backoff as the "not connected" case.
+
 ## v1.8.0-rc.24
 
 ### Fixed

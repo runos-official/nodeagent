@@ -47,6 +47,23 @@ func isWaitForControlPlane(err error) (string, bool) {
 	return strings.TrimPrefix(st.Message(), waitForControlPlanePrefix), true
 }
 
+// isTransientFetchError reports whether a GetInstallCommands error is worth another attempt: the
+// agent stream not yet registered on nodeward ("node agent ... is not connected", the cloud-init
+// timing case), a nodeward that is restarting (Unavailable), or a call that ran out of deadline
+// (DeadlineExceeded). Pure, so the policy is testable without a network.
+func isTransientFetchError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), "node agent") && strings.Contains(err.Error(), "is not connected") {
+		return true
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Code() == codes.Unavailable || st.Code() == codes.DeadlineExceeded
+	}
+	return false
+}
+
 // waitVerdict decides what one refused attempt means, given how long we have waited so far. Pure,
 // so the policy is testable without a network.
 type waitVerdict int
@@ -125,10 +142,13 @@ func K8s() error {
 			break
 		}
 
-		// Check if this is a transient "not connected" error
-		if strings.Contains(err.Error(), "node agent") && strings.Contains(err.Error(), "is not connected") {
+		// Check if this is a transient "not connected" error, or a transient transport error: a
+		// nodeward rollout (Unavailable) or a slow first call after a wait (DeadlineExceeded) is not
+		// a verdict on this install, and since the fetch failure now reports INSTALL_ERROR (G30-F3)
+		// it must not be reached by a blip that a retry would have carried through.
+		if isTransientFetchError(err) {
 			if attempt < maxRetries {
-				roslog.W("Node agent stream not ready, retrying", err, "attempt", attempt, "delay", retryDelay)
+				roslog.W("Install command fetch hit a transient error, retrying", err, "attempt", attempt, "delay", retryDelay)
 				time.Sleep(retryDelay)
 				retryDelay *= 2 // Exponential backoff
 				continue
