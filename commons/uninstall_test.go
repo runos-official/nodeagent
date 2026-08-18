@@ -311,3 +311,86 @@ func TestVmGroupFirewallCleanupSteps_ReleasesTheHeldAddressesBeforeRemovingTheRe
 		t.Errorf("the conf directory (and its held file) should have been removed, stat err = %v", err)
 	}
 }
+
+// THE CUSTOMER FIREWALL (goal 30, customer-firewall-rules). 078-vm-firewall gives a machine two
+// chains whose names carry its vmid, jumped to from a RUNOS-VMFW dispatch chain in filter FORWARD.
+// Those names are not knowable here, so the cleanup asks `iptables -S` which ones exist. Same rule
+// as every other chain in this file: whatever RunOS installs on a node, its removal is written in
+// the same change, or a reset leaves a box that is not bare.
+
+func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("fixture dir failed: %v", err)
+	}
+	log := filepath.Join(root, "iptables.log")
+	// A fake iptables that answers `-S` with one machine's chains, the dispatch chain and a leftover
+	// shadow, plus chains RunOS does not own. Everything else it is asked to do is recorded.
+	fake := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + log + "\n" +
+		"case \"$1\" in -S) printf '%s\\n' " +
+		"'-N CILIUM_FORWARD' '-N RUNOS-VMFW' '-N RUNOS-VMFW-vm1abc-IN' '-N RUNOS-VMFW-vm1abc-OUT' " +
+		"'-N RUNOS-VMFW-vm2def-IN-N' '-N KUBE-FORWARD' ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "iptables"), []byte(fake), 0o755); err != nil {
+		t.Fatalf("fixture write failed: %v", err)
+	}
+	for _, name := range []string{"ip6tables", "systemctl"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("fixture write failed: %v", err)
+		}
+	}
+	// A stand-in for `timeout`, which macOS does not ship; it drops the duration and runs the rest.
+	if err := os.WriteFile(filepath.Join(bin, "timeout"), []byte("#!/bin/sh\nshift\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatalf("fixture write failed: %v", err)
+	}
+
+	for _, s := range vmGroupFirewallCleanupSteps(filepath.Join(root, "conf"),
+		filepath.Join(root, "applier"), filepath.Join(root, "units")) {
+		runStep(t, s, bin)
+	}
+
+	out, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatalf("the fake iptables was never called: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		// The FORWARD jump first, so nothing is jumping into a chain being deleted.
+		"-D FORWARD -j RUNOS-VMFW",
+		"-F RUNOS-VMFW",
+		"-X RUNOS-VMFW",
+		"-F RUNOS-VMFW-vm1abc-IN",
+		"-X RUNOS-VMFW-vm1abc-IN",
+		"-F RUNOS-VMFW-vm1abc-OUT",
+		"-X RUNOS-VMFW-vm1abc-OUT",
+		// The `-N` shadow a build that died mid-swap leaves behind.
+		"-X RUNOS-VMFW-vm2def-IN-N",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cleanup does not run %q, got:\n%s", want, got)
+		}
+	}
+	// Scoped to what RunOS owns: a cleanup that flushed cilium's or kube-proxy's chains would take
+	// the node's own networking with it.
+	for _, never := range []string{"CILIUM_FORWARD", "KUBE-FORWARD"} {
+		if strings.Contains(got, "-F "+never) || strings.Contains(got, "-X "+never) {
+			t.Errorf("cleanup touched %s, which is not RunOS's to touch:\n%s", never, got)
+		}
+	}
+	// FLUSH EVERY CHAIN BEFORE DELETING ANY: `-X` refuses a chain another chain still jumps to, and
+	// `iptables -S` lists them in an arbitrary order, so a single flush-then-delete loop would leave
+	// whichever per-machine chain it reached before the dispatch chain alive on the node.
+	lastFlush, firstDelete := -1, -1
+	for i, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if strings.HasPrefix(line, "-F RUNOS-VMFW") {
+			lastFlush = i
+		}
+		if firstDelete < 0 && strings.HasPrefix(line, "-X RUNOS-VMFW") {
+			firstDelete = i
+		}
+	}
+	if lastFlush < 0 || firstDelete < 0 || lastFlush > firstDelete {
+		t.Errorf("every RUNOS-VMFW chain must be flushed (last at %d) before any is deleted (first at %d)", lastFlush, firstDelete)
+	}
+}

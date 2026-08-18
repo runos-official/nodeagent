@@ -9,6 +9,16 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.28
+
+### Fixed
+
+- **The uninstall removes the per-VM firewall chains too** (goal 30, customer-firewall-rules).
+  Conductor's 076-vm-group-bridge applier now also builds `RUNOS-VMFW` in filter FORWARD and one
+  `RUNOS-VMFW-<vmid>-IN` / `-OUT` chain per machine that has rules; the uninstall removes the
+  FORWARD jump, every one of those chains and their `-N` shadows, so a cluster reset still leaves
+  the box bare.
+
 ## v1.8.0-rc.27
 
 ### Fixed

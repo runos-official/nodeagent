@@ -67,7 +67,9 @@ func vmGroupBridgeCleanupSteps(unitDir string) []string {
 // the rules at boot. It also installs iptables chains jumped to from mangle PREROUTING, filter
 // INPUT (IPv4 and IPv6), nat POSTROUTING and nat PREROUTING, and for an operator-assigned VM address
 // (077-vm-address-binding, goal 30) it holds that address on the WAN interface and records it in
-// .held-addresses in the same conf dir.
+// .held-addresses in the same conf dir. For a machine with customer firewall rules
+// (078-vm-firewall, goal 30) it also installs a RUNOS-VMFW dispatch chain jumped to from filter
+// FORWARD plus two RUNOS-VMFW-<vmid>-* chains, and records their names in .vmfw-chains.
 //
 // MEASURED on 2026-08-17, immediately after writing the thing: a full cluster reset left the unit
 // ENABLED, the applier in place and both chains installed on every host, on boxes the reset had
@@ -125,6 +127,20 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 			"iptables -t nat -F RUNOS-VMGRP-DNAT-N 2>/dev/null; " +
 			"iptables -t nat -X RUNOS-VMGRP-DNAT-N 2>/dev/null; " +
 			"for b in iptables ip6tables; do $b -F RUNOS-VMGRP-IN-N 2>/dev/null; $b -X RUNOS-VMGRP-IN-N 2>/dev/null; done' || true",
+		// The CUSTOMER firewall (goal 30, customer-firewall-rules): a dispatch chain jumped to from
+		// filter FORWARD, plus two chains per machine that had rules on this node. Their names carry
+		// the machine's vmid, so they cannot be listed here the way the fixed RUNOS-VMGRP names can;
+		// `iptables -S` is asked which ones exist instead. Same rule as every chain above: whatever
+		// RunOS installs on a node, its removal is written in the same change, so a reset leaves the
+		// box bare. The FORWARD jump goes FIRST, so nothing is jumping into a chain being deleted.
+		// FLUSHED IN ONE PASS AND DELETED IN A SECOND, not both in one loop. `iptables -S` lists the
+		// chains in an arbitrary order, and `-X` refuses a chain another chain still jumps to, so a
+		// per-machine chain reached before the dispatch chain would survive the run. Flushing the
+		// dispatch chain removes every jump into the per-machine chains, and then all of them delete.
+		"timeout 30 sh -c 'iptables -D FORWARD -j RUNOS-VMFW 2>/dev/null; " +
+			"cs=$(iptables -S 2>/dev/null | awk \"/^-N RUNOS-VMFW/{print \\$2}\"); " +
+			"for c in $cs; do iptables -F \"$c\" 2>/dev/null; done; " +
+			"for c in $cs; do iptables -X \"$c\" 2>/dev/null; done' || true",
 		fmt.Sprintf("rm -f %s/runos-vm-group-firewall.service || true", unitDir),
 		fmt.Sprintf("rm -f %s %s.tmp || true", applier, applier),
 		fmt.Sprintf("rm -rf %s || true", confDir),
