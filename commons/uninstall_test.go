@@ -292,6 +292,21 @@ func TestVmGroupFirewallCleanupSteps_ReleasesTheHeldAddressesBeforeRemovingTheRe
 	if n := strings.Count(string(out), "addr del"); n != 2 {
 		t.Errorf("expected exactly 2 address releases, got %d:\n%s", n, out)
 	}
+	// ORDER: the addresses are released BEFORE the DNAT chain goes (unit-7 review). The other way
+	// round, the host answers for a VM's address while nothing forwards it: its own sshd on the
+	// guest's public address for that window.
+	heldIdx, dnatIdx := -1, -1
+	for i, st := range steps {
+		if heldIdx < 0 && strings.Contains(st, ".held-addresses") {
+			heldIdx = i
+		}
+		if dnatIdx < 0 && strings.Contains(st, "-X RUNOS-VMGRP-DNAT ") {
+			dnatIdx = i
+		}
+	}
+	if heldIdx < 0 || dnatIdx < 0 || heldIdx > dnatIdx {
+		t.Errorf("held addresses (step %d) must be released before the DNAT chain is removed (step %d)", heldIdx, dnatIdx)
+	}
 	if _, err := os.Stat(confDir); !os.IsNotExist(err) {
 		t.Errorf("the conf directory (and its held file) should have been removed, stat err = %v", err)
 	}

@@ -101,19 +101,20 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 		"timeout 30 sh -c 'iptables -t nat -D POSTROUTING -j RUNOS-VMGRP-NAT 2>/dev/null; " +
 			"iptables -t nat -F RUNOS-VMGRP-NAT 2>/dev/null; " +
 			"iptables -t nat -X RUNOS-VMGRP-NAT 2>/dev/null' || true",
+		// The assigned addresses the applier put on the WAN interface for onlink bindings, recorded
+		// as `WAN IP` lines in .held-addresses. Released BEFORE the DNAT chain below goes (unit-7
+		// review): the host must stop answering for the address before it stops forwarding it, or for
+		// that window the internet's packets for a VM land on the host's own sshd. And before the conf
+		// dir goes, because the file is the only record of which addresses on the interface are RunOS's.
+		// Read line by line and never globbed, so nothing but the listed pairs is touched.
+		fmt.Sprintf("timeout 30 sh -c 'f=%s/.held-addresses; [ -f \"$f\" ] || exit 0; "+
+			"while read -r wan addr; do [ -n \"$wan\" ] && [ -n \"$addr\" ] || continue; "+
+			"ip addr del \"$addr/32\" dev \"$wan\" 2>/dev/null; done < \"$f\"' || true", confDir),
 		// The nat PREROUTING chain that DNATs an operator-assigned address to a VM's pool address
 		// (goal 30, associate-and-disassociate). Same rule again.
 		"timeout 30 sh -c 'iptables -t nat -D PREROUTING -j RUNOS-VMGRP-DNAT 2>/dev/null; " +
 			"iptables -t nat -F RUNOS-VMGRP-DNAT 2>/dev/null; " +
 			"iptables -t nat -X RUNOS-VMGRP-DNAT 2>/dev/null' || true",
-		// The assigned addresses the applier put on the WAN interface for onlink bindings, recorded
-		// as `WAN IP` lines in .held-addresses. Released BEFORE the conf dir goes, because the file
-		// is the only record of which addresses on the interface are RunOS's: after the DNAT above is
-		// gone, an address left behind delivers the internet's packets for a VM to the host itself.
-		// Read line by line and never globbed, so nothing but the listed pairs is touched.
-		fmt.Sprintf("timeout 30 sh -c 'f=%s/.held-addresses; [ -f \"$f\" ] || exit 0; "+
-			"while read -r wan addr; do [ -n \"$wan\" ] && [ -n \"$addr\" ] || continue; "+
-			"ip addr del \"$addr/32\" dev \"$wan\" 2>/dev/null; done < \"$f\"' || true", confDir),
 		// The `-N` shadow chains the applier builds into and renames on a clean run. On a clean node
 		// they are already renamed to the stable names above, so these are usually no-ops; they only
 		// exist when a build failed mid-swap, and a reset must still leave the box bare.

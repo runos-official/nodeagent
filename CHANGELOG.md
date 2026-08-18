@@ -9,6 +9,15 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.27
+
+### Fixed
+
+- **The uninstall releases held assigned addresses BEFORE it removes the DNAT chain** (goal 30
+  unit-7 review). The other order left a window in which the host answered ARP for a VM's public
+  address while nothing forwarded it, so the internet's packets for the guest landed on the host's
+  own sshd. Test pins the order.
+
 ## v1.8.0-rc.26
 
 ### Fixed
