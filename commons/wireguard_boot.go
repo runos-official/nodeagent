@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/runos-official/nodeagent/roslog"
 )
@@ -41,12 +42,19 @@ const WgQuickUnitPath = "/etc/systemd/system/wg-quick@wg0.service"
 // network-online.target, which the unit declares, so it is removed rather than left to confuse.
 const wgQuickDropInDir = "/etc/systemd/system/wg-quick@wg0.service.d"
 
+// wg0UnitName is the systemd unit for wg0, as systemctl addresses it.
+const wg0UnitName = "wg-quick@wg0"
+
 // WgQuickUnit must stay byte-identical to nodeward's uc/prep WgQuickUnit (nodeward's test suite
 // checks the two when the repos are checked out side by side).
 const WgQuickUnit = `# RunOS managed. Do not edit: the node agent restores this file.
 # This instance unit shadows the stock wg-quick@.service template for wg0. It is the stock unit
 # with nss-lookup.target REMOVED from the ordering: dnsmasq provides that target and RunOS orders
 # dnsmasq after wg0, so keeping it is a cycle that systemd breaks by not starting wg0 at boot.
+# ExecStart is also GUARDED, because wg-quick up refuses an interface that already exists and
+# dnsmasq and runos-clear-link-dns both Want= this unit. Without the guard, every pull after the
+# install had created wg0 failed with "wg0 already exists" and left the node degraded (G28-F2,
+# measured 2026-08-19). The guard keeps the boot path identical: no wg0, so wg-quick brings it up.
 [Unit]
 Description=WireGuard via wg-quick(8) for wg0 (RunOS)
 After=network-online.target
@@ -58,7 +66,7 @@ Documentation=man:wg(8)
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/wg-quick up wg0
+ExecStart=/bin/sh -c 'ip link show wg0 >/dev/null 2>&1 || exec /usr/bin/wg-quick up wg0'
 ExecStop=/usr/bin/wg-quick down wg0
 ExecReload=/bin/bash -c 'exec /usr/bin/wg syncconf wg0 <(exec /usr/bin/wg-quick strip wg0)'
 Environment=WG_ENDPOINT_RESOLUTION_RETRIES=infinity
@@ -94,13 +102,62 @@ func EnsureWg0BootOrder() {
 			dropInRemoved = true
 		}
 	}
-	if !changed && !dropInRemoved {
+	if changed || dropInRemoved {
+		roslog.I("Restored the wg0 unit; wg0 will start at the next boot without waiting on dnsmasq", "path", WgQuickUnitPath, "dropInRemoved", dropInRemoved)
+		if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
+			roslog.W("systemctl daemon-reload failed after restoring the wg0 unit; it applies at the next reload", err, "output", string(out))
+		}
+	}
+	clearFailedWg0Unit()
+}
+
+// systemctlRun is the seam the tests replace. Production runs systemctl.
+var systemctlRun = func(args ...string) (string, error) {
+	out, err := exec.Command("systemctl", args...).CombinedOutput()
+	return string(out), err
+}
+
+// clearFailedWg0Unit repairs a node whose wg-quick@wg0 unit is in the failed state while wg0
+// itself is up.
+//
+// G28-F2, measured 2026-08-19 on fttb2 and on two nested guests. The install brought wg0 up by
+// hand and only ENABLED the unit. dnsmasq and runos-clear-link-dns both Want= it, so their
+// starts pulled it, the stock ExecStart refused an interface that already existed, and the node
+// finished its install with a failed unit and systemctl is-system-running = degraded. It stayed
+// degraded until its first reboot, when wg-quick won the race instead.
+//
+// The install no longer leaves it that way (nodeward uc/prep/10_wg.go starts the unit), and the
+// unit's ExecStart is now guarded. This repairs the nodes ALREADY in the fleet, which nothing
+// re-installs. reset-failed clears the degraded verdict, and the start succeeds against the
+// guarded ExecStart without touching the interface or the peers the agent added to it.
+//
+// It is a no-op on a healthy node, costs one systemctl read per agent start, and never fails
+// fatally: an unrepaired unit is cosmetic while the tunnel is up.
+func clearFailedWg0Unit() {
+	// is-failed prints the state and exits non-zero when the unit is NOT failed, so read the
+	// word rather than the exit code.
+	out, _ := systemctlRun("is-failed", wg0UnitName)
+	if strings.TrimSpace(out) != "failed" {
 		return
 	}
-	roslog.I("Restored the wg0 unit; wg0 will start at the next boot without waiting on dnsmasq", "path", WgQuickUnitPath, "dropInRemoved", dropInRemoved)
-	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
-		roslog.W("systemctl daemon-reload failed after restoring the wg0 unit; it applies at the next reload", err, "output", string(out))
+	if out, err := systemctlRun("reset-failed", wg0UnitName); err != nil {
+		roslog.W("Could not clear the failed wg0 unit; the node keeps reporting degraded", err, "unit", wg0UnitName, "output", out)
+		return
 	}
+	// Reload UNCONDITIONALLY before the start, not only when this run rewrote the file. A previous
+	// run may have written the guarded unit and then had its daemon-reload fail; on this run the
+	// bytes on disk already match, so nothing above reloads, and a start would execute the STALE
+	// unguarded ExecStart systemd still holds and fail again. The node would then stay degraded
+	// through every agent start until its next reboot. This branch only runs on a failed unit, so a
+	// healthy node still pays exactly one is-failed read.
+	if out, err := systemctlRun("daemon-reload"); err != nil {
+		roslog.W("daemon-reload failed before repairing the wg0 unit; the start may run a stale unit", err, "output", out)
+	}
+	if out, err := systemctlRun("start", wg0UnitName); err != nil {
+		roslog.W("Cleared the failed wg0 unit but could not start it; it starts at the next boot", err, "unit", wg0UnitName, "output", out)
+		return
+	}
+	roslog.I("Repaired the wg0 unit: it was failed while wg0 was up, so the node reported degraded", "unit", wg0UnitName)
 }
 
 // ensureFileContent writes want to path when the file is absent or differs. Returns whether it

@@ -303,8 +303,8 @@ func checkNATEndpointCollision() error {
 		return nil
 	}
 
-	return fmt.Errorf("this node is behind NAT (private %s vs public %s)\n\nWireGuard identifies peers by their public UDP endpoint. If you place more than one RunOS node behind this same NAT/public IP, their tunnels collide and only one stays up, and same-NAT peers also need NAT hairpin support. Give each node a distinct routable IP, or a distinct inbound UDP 51820 port-forward per node. A single node behind NAT is fine.\nThis is a networking heads-up, not a RunOS limitation.",
-		ifaceIP, extIP)
+	return fmt.Errorf("this node is behind NAT (private %s vs public %s)\n\nWireGuard identifies peers by their public UDP endpoint. If you place more than one RunOS node behind this same NAT/public IP, their tunnels collide and only one stays up, and same-NAT peers also need NAT hairpin support. A single node behind NAT is fine.\n\nThe RunOS remedy, when the nodes CAN reach each other privately (one LAN, or guests on one VM host): declare that path and RunOS gives each peer the private address instead of the shared public one.\n  runos clusters networks create --cid <cid> --name <network-name> --json   # prints the network id\n  runos clusters networks join --cid <cid> --network-id <networkId> --nid <nid> --address %s\nDeclaring the network is the whole remedy. Only add this if the node has NO inbound path at all, because it also REMOVES the node from the cluster public DNS record:\n  runos nodes ingress <nid> --cid <cid> --no-public-ingress\nProven on a two-node nested cluster 2026-08-18 and again 2026-08-19 (goal 28). Otherwise give each node a distinct routable IP, or a distinct inbound UDP 51820 port-forward per node.\nThis is a networking heads-up, not a RunOS limitation.",
+		ifaceIP, extIP, ifaceIP)
 }
 
 // checkHostFirewallEgressPosture inspects (locally, no network) the host's

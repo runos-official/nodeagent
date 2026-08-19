@@ -789,10 +789,22 @@ func idRouteOverlap(dst string, nets []idReservedNet) *idReservedNet {
 		}
 		dn = parsed
 	}
+	dstOnes, _ := dn.Mask.Size()
 	for i := range nets {
-		if nets[i].Net.Contains(dn.IP) {
-			return &nets[i]
+		if !nets[i].Net.Contains(dn.IP) {
+			continue
 		}
+		// AT LEAST AS SPECIFIC, which is the rule this function documents. Containment of the
+		// base address alone is not enough: an ALIGNED SUPERNET such as 10.96.0.0/11 has its
+		// base address inside 10.96.0.0/12 while being LESS specific, so it loses longest-prefix
+		// match against RunOS's own routes and must be left alone. Reporting it blocked the
+		// install for the one destination in all of IPv4 that hits the case (goal 28 adversarial
+		// review, 2026-08-19).
+		reservedOnes, _ := nets[i].Net.Mask.Size()
+		if dstOnes < reservedOnes {
+			continue
+		}
+		return &nets[i]
 	}
 	return nil
 }

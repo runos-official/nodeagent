@@ -1,6 +1,7 @@
 package preflight
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -96,4 +97,52 @@ func addrEntry(ifname, local string, prefixLen int) idAddrEntry {
 		PrefixLen int    `json:"prefixlen"`
 	}{Local: local, PrefixLen: prefixLen})
 	return e
+}
+
+// idRouteOverlap's contract is "AT LEAST AS SPECIFIC as the reserved range", because only such a
+// route wins longest-prefix match against RunOS's own. Found by the goal 28 adversarial review
+// 2026-08-19: the code tested only whether the destination's base address fell inside the reserved
+// range, so an ALIGNED SUPERNET was reported and blocked the install. 10.96.0.0/11 is the one
+// destination in all of IPv4 that hits it: its base address is 10.96.0.0, which sits inside
+// 10.96.0.0/12, while /11 is less specific and loses to RunOS's /12.
+func TestIdRouteOverlapAppliesTheAtLeastAsSpecificRule(t *testing.T) {
+	nets := idReservedNetsForTest(t)
+
+	for _, tc := range []struct {
+		dst  string
+		want bool
+		why  string
+	}{
+		{"10.96.0.10", true, "a host route inside the service range is the goal 28 blocker itself"},
+		{"10.96.0.0/12", true, "the reserved range exactly"},
+		{"10.96.0.0/16", true, "more specific, wins longest-prefix match"},
+		{"10.96.0.0/11", false, "an ALIGNED SUPERNET is less specific and loses; reporting it false-blocks"},
+		{"10.0.0.0/8", false, "a supernet whose base is outside the reserved range"},
+		{"172.25.1.0/24", true, "more specific than the pod range"},
+		{"172.25.0.0/15", false, "less specific than the pod range"},
+		{"192.168.1.0/24", false, "nothing to do with the reserved ranges"},
+	} {
+		got := idRouteOverlap(tc.dst, nets) != nil
+		if got != tc.want {
+			t.Errorf("idRouteOverlap(%q) = %v, want %v (%s)", tc.dst, got, tc.want, tc.why)
+		}
+	}
+}
+
+// idReservedNetsForTest builds the two ranges the check guards, without depending on the
+// production constructor's other inputs.
+func idReservedNetsForTest(t *testing.T) []idReservedNet {
+	t.Helper()
+	var out []idReservedNet
+	for _, c := range []struct{ cidr, label string }{
+		{"10.96.0.0/12", "the Kubernetes service range"},
+		{"172.25.0.0/16", "the Kubernetes pod range"},
+	} {
+		_, n, err := net.ParseCIDR(c.cidr)
+		if err != nil {
+			t.Fatalf("bad fixture %s: %v", c.cidr, err)
+		}
+		out = append(out, idReservedNet{CIDR: c.cidr, Label: c.label, Net: n})
+	}
+	return out
 }
