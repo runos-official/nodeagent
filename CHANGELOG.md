@@ -9,6 +9,60 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.30
+
+### Fixed
+
+- **A freshly installed node no longer finishes DEGRADED** (G28-F2). `wg-quick@wg0` was left in the
+  `failed` state on every newly installed node, so `systemctl is-system-running` reported
+  `degraded` until that node's first reboot. Measured 2026-08-19 on three nodes; two others that
+  had rebooted were clean, which is the tell. The install brought `wg0` up by hand and only
+  ENABLED the unit, so systemd never started it; `dnsmasq` and `runos-clear-link-dns` both carry
+  `Wants=wg-quick@wg0.service`, their starts pulled the unit, and its `ExecStart` ran against an
+  interface that already existed, which `wg-quick` refuses.
+
+  Two halves here, the third is in nodeward. The unit's `ExecStart` is now guarded, so a pull after
+  the interface exists is a no-op instead of a failure; the boot path is unchanged, because at boot
+  `wg0` does not exist and `wg-quick` brings it up exactly as before. And `EnsureWg0BootOrder` now
+  repairs a node ALREADY in the fleet, which nothing re-installs: `reset-failed`, `daemon-reload`,
+  then `start`. The reload is unconditional, because an earlier run may have written the guarded
+  unit and had its own reload fail; without it the repair would start the stale unit systemd still
+  holds and fail again, leaving the node degraded through every agent start.
+
+- **Preflight no longer blocks an install on an aligned supernet of a reserved range.**
+  `idRouteOverlap` documented an "at least as specific" rule and did not implement it: it compared
+  only the destination's base address, so a route to `10.96.0.0/11` was reported as overlapping the
+  service range `10.96.0.0/12` and BLOCKED the install, although a /11 is less specific and loses
+  longest-prefix match against RunOS's own routes. That is the one destination in all of IPv4 that
+  hits the case.
+
+### Added
+
+- **Control traffic gets priority over session data on the node's outbound stream** (goal 31,
+  starvation design decision 3). Every message a node sends takes one mutex, so a terminal
+  producing output as fast as it can would compete with every status reply the node owes the
+  control plane. Two classes only: control is everything the agent sends today, bulk is session
+  data, and control never waits behind bulk. Bulk yields for at most 250 ms and then sends, because
+  a console that never prints is as broken as one that starves the control plane. `SendToNodeward`
+  keeps exactly today's synchronous behaviour and only gains a counter around the lock wait.
+  Nothing calls `SendBulkToNodeward` yet; the session handling that will is the next piece.
+
+### Changed
+
+- **A mutex parameter that guarded nothing is gone** (no behaviour change). `stream.go` created a
+  local `streamMutex`, passed a pointer to every worker, and no worker ever used it: every response
+  goes out through `SendToNodeward`, which takes the package-level mutex in `outbound.go`. The
+  parameter read as the lock guarding the send path while the real one sat in another file, which
+  is an expensive false lead when the send path's serialisation is the fact you are grounding.
+
+- **The `nat-collision` warning names the remedy that actually works.** It offered only "a distinct
+  routable IP, or a distinct inbound UDP 51820 port-forward per node", and never mentioned the
+  declared-network model, which is what two RunOS nodes behind one public address actually use and
+  what goal 28 proved twice on hardware. It now prints the commands, with the node's own private
+  address filled in. Every printed command was run against the real CLI before shipping.
+  `--no-public-ingress` is gated on the node having no inbound path at all, and the text says
+  plainly that it also removes the node from the cluster's public DNS record.
+
 ## v1.8.0-rc.29
 
 ### Fixed
