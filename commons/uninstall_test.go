@@ -327,11 +327,14 @@ func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing
 	log := filepath.Join(root, "iptables.log")
 	// A fake iptables that answers `-S` with one machine's chains, the dispatch chain and a leftover
 	// shadow, plus chains RunOS does not own. Everything else it is asked to do is recorded.
+	// The cleanup now sweeps BOTH tables (G30-F16 moved the customer firewall to mangle), so every
+	// call carries `-t <table>` and the fixture must look past it to find -S. Keying on $1 alone
+	// silently listed nothing and every assertion below failed at once, which is how this was caught.
 	fake := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$*\" >> " + log + "\n" +
-		"case \"$1\" in -S) printf '%s\\n' " +
+		"for a in \"$@\"; do case \"$a\" in -S) printf '%s\\n' " +
 		"'-N CILIUM_FORWARD' '-N RUNOS-VMFW' '-N RUNOS-VMFW-N' '-N RUNOS-VMFW-vm1abc-IN' '-N RUNOS-VMFW-vm1abc-OUT' " +
-		"'-N RUNOS-VMFW-vm2def-IN-N' '-N KUBE-FORWARD' ;; esac\nexit 0\n"
+		"'-N RUNOS-VMFW-vm2def-IN-N' '-N KUBE-FORWARD'; break ;; esac; done\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "iptables"), []byte(fake), 0o755); err != nil {
 		t.Fatalf("fixture write failed: %v", err)
 	}
@@ -372,6 +375,12 @@ func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing
 		"-X RUNOS-VMFW-vm1abc-OUT",
 		// The `-N` shadow a build that died mid-swap leaves behind.
 		"-X RUNOS-VMFW-vm2def-IN-N",
+		// BOTH TABLES. The customer firewall lives in mangle since G30-F16, and a node uninstalled
+		// after an upgrade can still carry the old filter copies, so neither may be skipped.
+		"-t mangle -D FORWARD -j RUNOS-VMFW",
+		"-t filter -D FORWARD -j RUNOS-VMFW",
+		"-t mangle -X RUNOS-VMFW-vm1abc-IN",
+		"-t filter -X RUNOS-VMFW-vm1abc-IN",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("cleanup does not run %q, got:\n%s", want, got)
@@ -387,16 +396,23 @@ func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing
 	// FLUSH EVERY CHAIN BEFORE DELETING ANY: `-X` refuses a chain another chain still jumps to, and
 	// `iptables -S` lists them in an arbitrary order, so a single flush-then-delete loop would leave
 	// whichever per-machine chain it reached before the dispatch chain alive on the node.
-	lastFlush, firstDelete := -1, -1
-	for i, line := range strings.Split(strings.TrimSpace(got), "\n") {
-		if strings.HasPrefix(line, "-F RUNOS-VMFW") {
-			lastFlush = i
+	// PER TABLE, not globally. The sweep is `for t in filter mangle`, so the run is
+	// filter-flush, filter-delete, mangle-flush, mangle-delete: a global "last flush before first
+	// delete" is false BY DESIGN and asserting it would be asserting a bug. What must hold, and
+	// what actually protects the chains, is the ordering within each table.
+	for _, table := range []string{"filter", "mangle"} {
+		lastFlush, firstDelete := -1, -1
+		for i, line := range strings.Split(strings.TrimSpace(got), "\n") {
+			if strings.HasPrefix(line, "-t "+table+" -F RUNOS-VMFW") {
+				lastFlush = i
+			}
+			if firstDelete < 0 && strings.HasPrefix(line, "-t "+table+" -X RUNOS-VMFW") {
+				firstDelete = i
+			}
 		}
-		if firstDelete < 0 && strings.HasPrefix(line, "-X RUNOS-VMFW") {
-			firstDelete = i
+		if lastFlush < 0 || firstDelete < 0 || lastFlush > firstDelete {
+			t.Errorf("in table %s every RUNOS-VMFW chain must be flushed (last at %d) before any is deleted (first at %d)",
+				table, lastFlush, firstDelete)
 		}
-	}
-	if lastFlush < 0 || firstDelete < 0 || lastFlush > firstDelete {
-		t.Errorf("every RUNOS-VMFW chain must be flushed (last at %d) before any is deleted (first at %d)", lastFlush, firstDelete)
 	}
 }

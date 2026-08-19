@@ -68,8 +68,9 @@ func vmGroupBridgeCleanupSteps(unitDir string) []string {
 // INPUT (IPv4 and IPv6), nat POSTROUTING and nat PREROUTING, and for an operator-assigned VM address
 // (077-vm-address-binding, goal 30) it holds that address on the WAN interface and records it in
 // .held-addresses in the same conf dir. For a machine with customer firewall rules
-// (078-vm-firewall, goal 30) it also installs a RUNOS-VMFW dispatch chain jumped to from filter
-// FORWARD plus two RUNOS-VMFW-<vmid>-* chains, and records their names in .vmfw-chains.
+// (078-vm-firewall, goal 30) it also installs a RUNOS-VMFW dispatch chain jumped to from MANGLE
+// FORWARD plus two RUNOS-VMFW-<vmid>-* chains, and records their names in .vmfw-chains. It was
+// filter FORWARD until G30-F16 (2026-08-19), so both tables are swept.
 //
 // MEASURED on 2026-08-17, immediately after writing the thing: a full cluster reset left the unit
 // ENABLED, the applier in place and both chains installed on every host, on boxes the reset had
@@ -140,11 +141,19 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 		// BOTH JUMPS GO: the applier hooks FORWARD to the `-N` SHADOW first and renames it to the
 		// stable name on a clean swap, so a run that died mid-swap leaves `-j RUNOS-VMFW-N` in FORWARD.
 		// Deleting only the stable jump left that one behind, and `-X` then refused the chain it names.
-		"timeout 30 sh -c 'iptables -D FORWARD -j RUNOS-VMFW 2>/dev/null; " +
-			"iptables -D FORWARD -j RUNOS-VMFW-N 2>/dev/null; " +
-			"cs=$(iptables -S 2>/dev/null | awk \"/^-N RUNOS-VMFW/{print \\$2}\"); " +
-			"for c in $cs; do iptables -F \"$c\" 2>/dev/null; done; " +
-			"for c in $cs; do iptables -X \"$c\" 2>/dev/null; done' || true",
+		// BOTH TABLES. The customer firewall moved from filter to MANGLE (G30-F16, 2026-08-19),
+		// because in filter it hung under cilium's `-i lxc+ -j ACCEPT`, which ends the filter walk,
+		// so a pod on the machine's own host bypassed the customer's rules entirely. An uninstall
+		// must clear wherever the chains actually are, and a node uninstalled after an upgrade can
+		// still carry the old FILTER copies, so both are swept unconditionally. Every command is a
+		// no-op where the chains are absent.
+		"timeout 30 sh -c 'for t in filter mangle; do " +
+			"iptables -t $t -D FORWARD -j RUNOS-VMFW 2>/dev/null; " +
+			"iptables -t $t -D FORWARD -j RUNOS-VMFW-N 2>/dev/null; " +
+			"cs=$(iptables -t $t -S 2>/dev/null | awk \"/^-N RUNOS-VMFW/{print \\$2}\"); " +
+			"for c in $cs; do iptables -t $t -F \"$c\" 2>/dev/null; done; " +
+			"for c in $cs; do iptables -t $t -X \"$c\" 2>/dev/null; done; " +
+			"done' || true",
 		fmt.Sprintf("rm -f %s/runos-vm-group-firewall.service || true", unitDir),
 		fmt.Sprintf("rm -f %s %s.tmp || true", applier, applier),
 		fmt.Sprintf("rm -rf %s || true", confDir),
