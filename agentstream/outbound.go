@@ -29,9 +29,16 @@ func SetGlobalStream(client l2sec.Nodeward_NodeAgentStreamClient) {
 	globalStream = client
 }
 
-// SendToNodeward sends a message to Nodeward
+// SendToNodeward sends a message to Nodeward.
+//
+// This is the CONTROL path: instruction responses, status, everything the agent sends today. Its
+// behaviour is unchanged, including returning the send error synchronously, which every caller
+// relies on. It is counted as control while it waits so that a bulk sender (goal 31 session data)
+// gives way to it; see egress.go.
 func SendToNodeward(msg *l2sec.FromNodeAgent) error {
+	controlWaiting.Add(1)
 	streamMutex.Lock()
+	controlWaiting.Add(-1)
 	defer streamMutex.Unlock()
 
 	// Check if we have a valid stream client
@@ -54,6 +61,37 @@ func SendToNodeward(msg *l2sec.FromNodeAgent) error {
 	}
 
 	roslog.I("Sent message to Nodeward", "type", msg.Type, "tag", msg.Tag, "bytes", payloadBytes)
+	return nil
+}
+
+// SendBulkToNodeward sends session data (goal 31), yielding to control traffic first.
+//
+// Same stream, same mutex, same error contract. The only difference is that it waits while the
+// node has control traffic to send, up to a ceiling. That ceiling matters: without it a node under
+// sustained control load would stall a terminal for ever, which is the opposite failure and just
+// as bad as starving the control plane.
+//
+// The caller is the session goroutine, so making it wait IS the backpressure: it stops reading
+// from the far end rather than buffering, and no frame is ever dropped.
+func SendBulkToNodeward(msg *l2sec.FromNodeAgent) error {
+	bulkGate.Lock()
+	defer bulkGate.Unlock()
+	if waitForControlIdle() {
+		roslog.I("Bulk frame gave way to control traffic", "type", msg.Type)
+	}
+	streamMutex.Lock()
+	defer streamMutex.Unlock()
+
+	if globalStream == nil {
+		return fmt.Errorf("stream not initialized")
+	}
+	if msg.Tag == "" {
+		msg.Tag = uuid.New().String()
+	}
+	if err := globalStream.Send(msg); err != nil {
+		roslog.E("Error sending bulk frame to Nodeward", err, "type", msg.Type, "tag", msg.Tag)
+		return err
+	}
 	return nil
 }
 
