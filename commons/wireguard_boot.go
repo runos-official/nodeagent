@@ -120,7 +120,7 @@ var systemctlRun = func(args ...string) (string, error) {
 // clearFailedWg0Unit repairs a node whose wg-quick@wg0 unit is in the failed state while wg0
 // itself is up.
 //
-// G28-F2, measured 2026-08-19 on fttb2 and on two nested guests. The install brought wg0 up by
+// G28-F2, measured 2026-08-19 on three freshly installed nodes. The install brought wg0 up by
 // hand and only ENABLED the unit. dnsmasq and runos-clear-link-dns both Want= it, so their
 // starts pulled it, the stock ExecStart refused an interface that already existed, and the node
 // finished its install with a failed unit and systemctl is-system-running = degraded. It stayed
