@@ -26,9 +26,6 @@ func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 	// Set the global stream for outbound messages
 	SetGlobalStream(stream)
 
-	// Create a mutex to protect stream.Send access
-	var streamMutex sync.Mutex
-
 	// Create channel for instructions
 	instructionChan := make(chan instructionTask, 20) // Buffer for incoming instructions
 
@@ -40,7 +37,7 @@ func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			processInstructions(ctx, workerID, instructionChan, stream, &streamMutex)
+			processInstructions(ctx, workerID, instructionChan)
 		}(i)
 	}
 
@@ -123,12 +120,14 @@ func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 }
 
 // processInstructions handles instructions from the instruction channel
+// It does NOT take a mutex or the stream: every response goes out through SendToNodeward, which
+// takes the package-level streamMutex in outbound.go. A local mutex used to be created here and
+// threaded through, and it was never used by anything, so it read as the lock guarding the send
+// path while the real one sat elsewhere.
 func processInstructions(
 	ctx context.Context,
 	workerID int,
 	instructionChan <-chan instructionTask,
-	stream l2sec.Nodeward_NodeAgentStreamClient,
-	streamMutex *sync.Mutex,
 ) {
 	roslog.I("Worker started", "worker_id", workerID)
 
