@@ -295,6 +295,26 @@ func handleStreamResize(sessionID string, payloadB64 string) {
 	}
 }
 
+// MaxBulkFrameBytes caps one frame of session output, and it is a LATENCY bound, not a memory one.
+//
+// G31-F1, MEASURED 2026-08-20 against the real session machinery over a modelled 8 MB/s link:
+//
+//	output frame   control p50, idle   control p50, 1 session   control p50, 16 sessions
+//	16 KiB         0.16 ms             0.19 ms                  1.80 ms
+//	512 KiB        0.16 ms             70.3 ms                  70.4 ms
+//
+// The egress priority in egress.go stops control traffic QUEUEING behind session data: a bulk
+// sender yields while control is waiting. What it cannot do is recall a bulk send already in
+// flight, because the mutex is held for the whole of it. So control latency is bounded by ONE
+// output frame's transmit time, and until this cap existed that bound was whatever the far end
+// happened to hand over. ONE terminal was enough to hold the control plane for 70 ms.
+//
+// Capping the FRAME rather than making the send path clever keeps decision 3's shape: the mutex
+// stays where it is, control still never queues behind bulk, and the residual wait is now one
+// small frame. 16 KiB is a typical PTY read, so ordinary terminal output is unaffected and only a
+// coalesced burst is split.
+const MaxBulkFrameBytes = 16 * 1024
+
 // sendSessionData carries far-end output back to nodeward on the BULK path, so a terminal printing
 // as fast as it can gives way to anything the node owes the control plane (decision 3).
 //
@@ -303,17 +323,26 @@ func handleStreamResize(sessionID string, payloadB64 string) {
 // reader stops reading and the far end's own buffer fills, which is what a slow terminal should
 // do. Nothing is ever dropped, because a console that silently loses bytes is worse than one that
 // stutters.
+//
+// SPLIT AT MaxBulkFrameBytes, in order, so a burst cannot hold the send path for long. Splitting is
+// safe on a byte stream: the far side reassembles by concatenation and a terminal has no frame
+// boundaries to preserve.
 func sendSessionData(sessionID string, data []byte) {
-	if len(data) == 0 {
-		return
-	}
-	err := SendBulkToNodeward(&l2sec.FromNodeAgent{
-		Type:    StreamDataResponseType,
-		Tag:     sessionID,
-		JsonB64: base64.StdEncoding.EncodeToString(data),
-	})
-	if err != nil {
-		closeSession(sessionID, fmt.Sprintf("the session's output could not be sent: %v", err), true)
+	for len(data) > 0 {
+		n := len(data)
+		if n > MaxBulkFrameBytes {
+			n = MaxBulkFrameBytes
+		}
+		err := SendBulkToNodeward(&l2sec.FromNodeAgent{
+			Type:    StreamDataResponseType,
+			Tag:     sessionID,
+			JsonB64: base64.StdEncoding.EncodeToString(data[:n]),
+		})
+		if err != nil {
+			closeSession(sessionID, fmt.Sprintf("the session's output could not be sent: %v", err), true)
+			return
+		}
+		data = data[n:]
 	}
 }
 

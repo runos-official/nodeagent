@@ -9,6 +9,39 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.32
+
+### Fixed
+
+- **One terminal could hold the control plane for 70 ms at a time** (G31-F1, measured 2026-08-20).
+  Session output frames were uncapped, so a frame's size decided how long the node's single send
+  mutex was held, and every status reply, heartbeat and instruction response waited behind it.
+
+  The egress priority added in rc.30 stops control traffic QUEUEING behind session data: a bulk
+  sender yields while control is waiting. What it cannot do is recall a bulk send already in
+  flight. So control latency was bounded by ONE output frame's transmit time, and that bound was
+  whatever the far end happened to hand over.
+
+  Measured against the real session machinery over a modelled 8 MB/s link, control p50:
+
+  | output frame | idle | 1 session | 16 sessions |
+  |---|---|---|---|
+  | 16 KiB | 0.16 ms | 0.19 ms | 1.80 ms |
+  | 512 KiB, before | 0.16 ms | **70.3 ms** | **70.4 ms** |
+  | 512 KiB, after | 0.15 ms | 2.0 ms | 1.8 ms |
+  | 1 MiB, after | 0.16 ms | 2.0 ms | 1.8 ms |
+
+  **One session was enough**, which is the part that matters: this was not a many-terminals
+  problem, it was a one-big-frame problem. Output is now split at 16 KiB, a typical PTY read, so
+  ordinary terminal output is untouched and only a coalesced burst is divided. Splitting is safe on
+  a byte stream: the far side reassembles by concatenation.
+
+  The cap bounds the residual wait rather than removing it, and that is deliberate. Control still
+  waits for at most one frame in flight, which is the price of leaving the send path simple instead
+  of making it clever. The measurement now derives its own limit from the cap and the link speed,
+  so a generous round number cannot hide the next regression: with the cap removed it reports the
+  70 ms starvation and fails.
+
 ## v1.8.0-rc.31
 
 ### Added
