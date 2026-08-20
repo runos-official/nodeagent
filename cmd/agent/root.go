@@ -342,6 +342,12 @@ func runConnection(rootCtx context.Context) (shutdown bool) {
 
 	roslog.D("Stream established, starting services")
 
+	// The far end for interactive sessions (goal 31). Installed BEFORE the stream handler starts,
+	// so an OPEN_STREAM arriving on the first frame finds a dialer rather than a refusal. Without
+	// one installed, OPEN_STREAM is refused with a reason saying so, which is the honest answer
+	// for a build that cannot serve terminals.
+	agentstream.SetDialer(agentstream.DialServiceWebSocket)
+
 	// Start the instruction stream handler.
 	streamDone := agentstream.StartInstructionStreamHandler(connCtx, stream)
 
