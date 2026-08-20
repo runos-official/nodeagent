@@ -9,6 +9,54 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.31
+
+### Added
+
+- **Interactive sessions, the agent half** (goal 31). The agent can now hold a live two-way session
+  and stream it to a far end, which is what lets a terminal work on a machine with no inbound path
+  and no public DNS record. Nothing sends a session frame yet, so this release changes no behaviour
+  on any node: it is shipped alone, and early, precisely so that anything it does disturb is
+  attributable to it rather than to a bundle.
+
+  **A SESSION IS NOT AN INSTRUCTION, and that is the design.** An instruction is request-and-reply
+  and returns; a session is open for as long as somebody is typing. Handing one to the worker pool
+  would hold one of five workers for the life of a terminal, so five open terminals would leave a
+  node unable to apply a manifest, run a script or report its status. No value of `numWorkers`
+  fixes that. Session frames are therefore dispatched on the RECEIVER goroutine, beside
+  `HandleInstructionAsResponse` and before the pool, and never touch the instruction channel.
+
+  **Bounded at 16 and refused rather than queued**, with a reason naming the limit. A queued
+  terminal is a terminal that appears to hang. The slot is reserved before the far end is dialled,
+  so two opens arriving together cannot both pass the check, and it is returned when a dial fails,
+  or a node would lose a slot per failure and end up refusing everything while holding nothing.
+
+  **The l2sec contract is unchanged**, deliberately. Session frames ride the `ToNodeAgent` message
+  that already exists: `type` names the frame, `tag` carries the session id, `jsonB64` carries the
+  payload. That proto is hand-synced between nodeward and this repo with no gate over it, and proto
+  drift is the coordination hazard this goal names as its worst.
+
+  Output leaves on `SendBulkToNodeward`, so a terminal printing flat out gives way to anything the
+  node owes the control plane. The send is synchronous, so a far end producing faster than the
+  stream drains is made to wait: that is the backpressure, and nothing is ever dropped, because a
+  console that silently loses bytes is worse than one that stutters.
+
+- **The web-terminal far end.** A plain websocket to a Service inside the cluster, dialled from the
+  node so it resolves through the cluster's own DNS. Nothing about this path leaves the cluster.
+
+  Built by reading the terminal server's own source rather than assuming it behaves like ttyd, and
+  two details would have been wrong by assumption. The client must offer TWO subprotocols: the one
+  carrying the pre-shared key, which the server deliberately never selects because a selection is
+  echoed in a response header, and the plain one it does select. And a message over 1 MiB is
+  DROPPED by the far end with only a server-side log line, so input is chunked here rather than
+  handed over whole and lost silently.
+
+  A resize is a JSON object carrying `cols` and `rows` and nothing else, because the far end tells
+  a resize from input by parsing every message as JSON. A zero dimension is never sent, since a
+  refused resize falls through that parser into the PTY. The key rides a header and never a query
+  string, which is the far end's own rule: a token in a URL is written into the ingress access log,
+  the browser's history and any `Referer` a page leaks.
+
 ## v1.8.0-rc.30
 
 ### Fixed
