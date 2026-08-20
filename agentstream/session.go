@@ -214,9 +214,14 @@ func handleOpenStream(sessionID string, payloadB64 string) {
 	sessions[sessionID] = s
 	sessionsMu.Unlock()
 
+	// THE CALLBACKS BIND TO THIS SESSION, NOT TO ITS ID. A far end outlives the moment it is
+	// hung up: its reader goroutine is still in flight and will call back once, afterwards. If the
+	// id has been reused by then, an id-bound callback closes somebody else's session and reports
+	// their terminal as ended. Conductor issues unique ids, so this is a guard rather than a
+	// live defect, but it costs one pointer comparison and removes the question.
 	far, err := d(sessionID, open,
-		func(b []byte) { sendSessionData(sessionID, b) },
-		func(reason string, isError bool) { closeSession(sessionID, reason, isError) },
+		func(b []byte) { sendSessionDataFrom(s, b) },
+		func(reason string, isError bool) { closeSessionInstance(s, reason, isError) },
 	)
 	if err != nil {
 		// The reservation must come back, or a node loses a slot every time a dial fails and
@@ -344,6 +349,28 @@ func sendSessionData(sessionID string, data []byte) {
 		}
 		data = data[n:]
 	}
+}
+
+// stillRegistered says whether this exact session is the one the node currently holds under its
+// id. A far end that was hung up moments ago fails this, and so does one whose id was reissued.
+func stillRegistered(s *session) bool {
+	sessionsMu.Lock()
+	defer sessionsMu.Unlock()
+	return sessions[s.id] == s
+}
+
+func sendSessionDataFrom(s *session, data []byte) {
+	if !stillRegistered(s) {
+		return
+	}
+	sendSessionData(s.id, data)
+}
+
+func closeSessionInstance(s *session, reason string, isError bool) {
+	if !stillRegistered(s) {
+		return
+	}
+	closeSession(s.id, reason, isError)
 }
 
 func lookupSession(sessionID string) *session {
