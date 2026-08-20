@@ -48,6 +48,10 @@ func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 		// Make sure all workers finish when we're done
 		defer func() {
 			roslog.I("Stream receiver shutting down, closing instruction channel and waiting for workers")
+			// A session is only meaningful while the stream carrying it is up. Left open across a
+			// reconnect it would strand a shell on this node with nobody reading it, and the far
+			// side would wait for output that can no longer be delivered.
+			CloseAllSessions("the node's connection to RunOS went down")
 			close(instructionChan)
 			wg.Wait()
 			roslog.I("All workers finished, stream handler done")
@@ -99,6 +103,19 @@ func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 				// Check if this is a response to an outbound message
 				if HandleInstructionAsResponse(instruction) {
 					// If it was handled as a response, we're done
+					continue
+				}
+
+				// A SESSION IS NOT AN INSTRUCTION (goal 31, decision 1). Handled here, on the
+				// receiver, beside HandleInstructionAsResponse and BEFORE the pool, so an
+				// interactive terminal never holds one of the five workers for its whole life.
+				// Five terminals would otherwise leave this node unable to apply a manifest, run a
+				// script or report its status, and no value of numWorkers fixes that.
+				//
+				// HandleSessionFrame returns immediately in every case; see its comment for the
+				// one thing it does wait on and why that wait is the backpressure.
+				if IsSessionFrame(instruction) {
+					HandleSessionFrame(instruction)
 					continue
 				}
 
