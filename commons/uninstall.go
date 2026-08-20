@@ -282,6 +282,12 @@ func Uninstall(full bool) error {
 	step("rm -f " + WgQuickUnitPath + " || true")
 	step("rm -rf " + wgQuickDropInDir + " || true")
 	step("systemctl daemon-reload || true")
+	// AND CLEAR THE FAILED STATE, after the unit file is gone and the reload has run. systemd keeps
+	// a failed unit in its list even once the fragment is deleted, so `systemctl --failed` showed
+	// `wg-quick@wg0.service not-found failed` and `systemctl is-system-running` answered DEGRADED on
+	// a box RunOS had just wiped clean. Measured on ftb1 2026-08-20, on the very uninstall that was
+	// meant to hand back a pristine machine. Same class as G28-F2, on the way out instead of in.
+	step("systemctl reset-failed wg-quick@wg0 || true")
 	roslog.Println("done")
 
 	// --- VM group pool bridges (best-effort) -------------------------------
