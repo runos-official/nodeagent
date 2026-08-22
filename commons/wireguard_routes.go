@@ -46,7 +46,7 @@ const wgInterface = "wg0"
 //
 // The add list is sorted so the same inputs always apply in the same order, which keeps logs
 // comparable between passes.
-func PlanPeerRoutes(ownPrefixes []*net.IPNet, desired []WgPeer, current []string) (add []string, remove []string) {
+func PlanPeerRoutes(ownPrefixes []*net.IPNet, localPrefixes []*net.IPNet, desired []WgPeer, current []string) (add []string, remove []string) {
 	want := make(map[string]bool)
 	for _, p := range desired {
 		// The peer's own address plus the VM pool addresses it hosts (goal 27,
@@ -57,6 +57,27 @@ func PlanPeerRoutes(ownPrefixes []*net.IPNet, desired []WgPeer, current []string
 				continue
 			}
 			if insideAny(ip, ownPrefixes) {
+				continue
+			}
+			// A DIRECTLY-CONNECTED NEIGHBOUR MUST NEVER BE ROUTED THROUGH A TUNNEL.
+			//
+			// Measured on the lab 2026-08-22/23, and it breaks nested RunOS by a race. A RunOS VM
+			// that becomes a RunOS node sits on its VM group's pool subnet (say 10.158.31.0/24 on
+			// enp1s0) alongside the guests it must peer with. The PARENT cluster's node correctly
+			// advertises every guest address as an allowed-ip, because from the parent's side they
+			// are its VMs reachable over its overlay. Without this check the guest installed
+			// `10.158.31.2 dev wg0`, a /32 that beats its own connected /24, so a handshake
+			// addressed to 10.158.31.2:51820 was routed INTO the tunnel whose endpoint that
+			// address is. Circular: tcpdump on the far guest saw zero packets, handshakes stayed
+			// at 0, and two worker joins died with INSTALL_ERROR. Deleting the route by hand had it
+			// re-added within seconds by this reconciler.
+			//
+			// It presented as a race because an already-established session survives on
+			// keepalives: the same procedure worked once and failed twice.
+			//
+			// This also covers the node's OWN pool address, which was being given a route to
+			// itself via wg0.
+			if insideAny(ip, localPrefixes) {
 				continue
 			}
 			want[ip.String()] = true
@@ -114,6 +135,35 @@ func Wg0Prefixes() ([]*net.IPNet, error) {
 // ipRouteEntry is the slice of `ip -j route` output this reads.
 type ipRouteEntry struct {
 	Dst string `json:"dst"`
+}
+
+// connectedPrefixesExcept returns every directly-connected IPv4 prefix on this host, skipping the
+// named interface. These are the subnets the kernel can already reach on the wire, so nothing in
+// them may be routed through the tunnel. See PlanPeerRoutes for what it cost when they were not
+// consulted.
+func connectedPrefixesExcept(skip string) ([]*net.IPNet, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("could not list interfaces: %w", err)
+	}
+	var out []*net.IPNet
+	for _, iface := range ifaces {
+		if iface.Name == skip || iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			n, ok := a.(*net.IPNet)
+			if !ok || n.IP.To4() == nil {
+				continue
+			}
+			out = append(out, &net.IPNet{IP: n.IP.Mask(n.Mask), Mask: n.Mask})
+		}
+	}
+	return out, nil
 }
 
 // ParsePeerRoutes reads `ip -j route show dev wg0 protocol <PeerRouteProto>` output into the list
@@ -179,7 +229,16 @@ func ApplyPeerRoutes(desired []WgPeer) {
 		roslog.E("Could not read the current peer routes; adding without removals", err)
 	}
 
-	add, remove := PlanPeerRoutes(prefixes, desired, current)
+	local, err := connectedPrefixesExcept(wgInterface)
+	if err != nil {
+		// Without the connected set we cannot tell a tunnelled peer from a directly-connected
+		// neighbour. Skip this pass rather than risk installing the circular route again: the
+		// next peer set converges.
+		roslog.E("Could not read the connected prefixes; skipping this peer-route pass", err)
+		return
+	}
+
+	add, remove := PlanPeerRoutes(prefixes, local, desired, current)
 	for _, dst := range remove {
 		if out, err := exec.Command("ip", "route", "del", dst+"/32", "dev", wgInterface, "protocol", PeerRouteProto).CombinedOutput(); err != nil {
 			roslog.E("Could not remove a peer route", err, "dst", dst, "output", string(out))
