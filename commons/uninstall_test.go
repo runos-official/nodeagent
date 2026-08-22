@@ -416,3 +416,46 @@ func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing
 		}
 	}
 }
+
+// Measured on ftb2 2026-08-22. After `clusters reset` uninstalled Kubernetes and rebooted the box
+// "back to bare", /var/lib/containerd still held 43 GB on a 63 GB root (80% full). containerd
+// itself was inactive, so the image store was pure orphan. The immediate rejoin was then BLOCKED
+// by preflight [disk-space], so a box that had been a healthy node ten minutes earlier could not
+// be rebuilt. ftb1 carried 32 GB of the same litter and only escaped because its root is 274 GB.
+//
+// The uninstall already stops containerd before wiping, and already wipes /etc/kubernetes,
+// /var/lib/kubelet, /var/lib/etcd and the CNI dirs. The runtime's own data dir was simply missing
+// from that list.
+func TestRuntimeDataWipeSteps_RemovesTheContainerdImageStore(t *testing.T) {
+	steps := runtimeDataWipeSteps()
+
+	joined := strings.Join(steps, "\n")
+	if !strings.Contains(joined, "/var/lib/containerd") {
+		t.Fatalf("uninstall never wipes /var/lib/containerd, so the next install is blocked by disk space.\nsteps:\n%s", joined)
+	}
+}
+
+// The wipe must not be able to wedge the uninstall. Every other best-effort step is bounded and
+// `|| true`, because a load-bearing step that fails turns into a permanent "partial uninstall" on
+// every retry, which is worse than the litter it was cleaning.
+func TestRuntimeDataWipeSteps_AreBestEffortAndBounded(t *testing.T) {
+	for _, s := range runtimeDataWipeSteps() {
+		if !strings.Contains(s, "|| true") {
+			t.Errorf("step is not best-effort, a failure would wedge the uninstall: %q", s)
+		}
+		if !strings.Contains(s, "timeout") {
+			t.Errorf("step is unbounded, a busy mount would hang the uninstall: %q", s)
+		}
+	}
+}
+
+// It removes the runtime's data, never its configuration or binaries: a re-install reuses the
+// packages and only needs the image store gone.
+func TestRuntimeDataWipeSteps_LeavesTheRuntimeInstalled(t *testing.T) {
+	joined := strings.Join(runtimeDataWipeSteps(), "\n")
+	for _, keep := range []string{"/etc/containerd", "/usr/bin/containerd", "/usr/local/bin/runos"} {
+		if strings.Contains(joined, keep) {
+			t.Errorf("wipe must not remove %s", keep)
+		}
+	}
+}

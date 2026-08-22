@@ -43,6 +43,33 @@ const (
 // Scoped to the 90-rvg prefix on purpose. wg0 and the cilium interfaces live in the same
 // directory and on the same link table, and a wider glob or an unfiltered link loop would take
 // the node off its own overlay to clean up a VM bridge.
+// runtimeDataWipeSteps removes the container runtime's DATA, and only its data.
+//
+// MEASURED on ftb2 2026-08-22, and it blocked a rebuild. After `clusters reset` uninstalled
+// Kubernetes and rebooted the box "back to bare", /var/lib/containerd still held 43 GB on a
+// 63 GB root, taking it to 80% full with containerd itself inactive. The immediate rejoin was
+// refused by preflight [disk-space], so a machine that had been a healthy node ten minutes
+// earlier could not be reinstalled. ftb1 carried 32 GB of the same and only escaped because its
+// root is 274 GB, which is exactly why this went unnoticed: it only bites the smaller disk.
+//
+// The uninstall already stops containerd and already wipes /etc/kubernetes, /var/lib/kubelet,
+// /var/lib/etcd and the CNI directories. The runtime's own image store was simply missing from
+// that list.
+//
+// BEST-EFFORT AND BOUNDED, deliberately, unlike the etcd and kubelet wipes above. Those assert
+// the target is gone because leftover cluster state is dangerous. This one is only litter: if a
+// reparented shim still holds a snapshot mount, failing the whole uninstall would turn a disk
+// space problem into a permanent "partial uninstall" on every retry, which is worse. When it does
+// fail the next preflight says [disk-space] in plain words, which is a recoverable outcome.
+//
+// Data only. /etc/containerd and the packages stay, because a reinstall reuses them and only
+// needs the image store gone.
+func runtimeDataWipeSteps() []string {
+	return []string{
+		"timeout -k 5 120 rm -rf /var/lib/containerd || true",
+	}
+}
+
 func vmGroupBridgeCleanupSteps(unitDir string) []string {
 	return []string{
 		fmt.Sprintf("rm -f %s/90-rvg*.netdev %s/90-rvg*.network || true", unitDir, unitDir),
@@ -268,6 +295,11 @@ func Uninstall(full bool) error {
 	step("rm -rf /etc/cni || true")
 	step("rm -rf /opt/cni || true")
 	step("rm -rf /var/lib/cni || true")
+	// The container runtime's image store. containerd was stopped a few lines above, so this is
+	// orphaned data by the time it runs. See runtimeDataWipeSteps for what it cost to leave it.
+	for _, s := range runtimeDataWipeSteps() {
+		step(s)
+	}
 	roslog.Println("done")
 
 	// --- WireGuard (best-effort) -------------------------------------------
