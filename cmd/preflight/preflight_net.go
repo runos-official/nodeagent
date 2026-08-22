@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -507,6 +508,48 @@ func checkNodewardHighPortVs443() error {
 		host, netPortList(highFailed), host, host, host, host)
 }
 
+// isTlsTransportFailure says whether a failed handshake failed at the TRANSPORT layer rather than
+// at certificate verification.
+//
+// MEASURED on ftb1 2026-08-22. A join was BLOCKED by this check with "the secure handshake FAILED:
+// read tcp 192.168.0.226:52618->116.203.136.98:9191: i/o timeout", and told the operator it
+// indicated "a TLS-intercepting proxy or a network MITM", with a remedy of exempting hosts from
+// TLS inspection. Checked by hand seconds later: TCP connect succeeded and an openssl s_client
+// handshake CONNECTED and returned the chain; the identical command then succeeded on retry with
+// nothing changed. The box is dual-homed on one subnet with equal route metrics, which is enough
+// to make a socket stall intermittently.
+//
+// A timeout, a reset or an EOF says nothing whatsoever about the certificate, and the remedy this
+// check offers cannot fix one, so treating it as interception sends the operator hunting for a
+// proxy that does not exist. Only a verification error is evidence of interception.
+//
+// This mirrors what the function already does when the TCP DIAL fails: defer to the reachability
+// checks rather than manufacture a MITM verdict. A handshake that times out is the same class of
+// event, one layer later.
+func isTlsTransportFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Certificate verification failed: that IS the finding this check exists for.
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &hostname) || errors.As(err, &invalid) {
+		return false
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	// A reset arrives as an OpError wrapping a syscall error; match on the operation rather than
+	// on errno so this stays portable.
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
+}
+
 // checkNodewardTlsHandshakePinned performs the SAME pinned TLS handshake the
 // L1Sec registration channel uses (TLS1.2+, ServerName=<host>, RootCAs = ONLY
 // the pinned RunOS public CA). It catches a TLS-intercepting proxy / corporate
@@ -559,6 +602,13 @@ func checkNodewardTlsHandshakePinned() error {
 		InsecureSkipVerify: false,
 	})
 	if err := tlsConn.Handshake(); err != nil {
+		// A transport-level failure is not evidence about the certificate. Degrade to a warning,
+		// exactly as the dial failure above does, so this check never blocks an install on a
+		// stalled socket. See isTlsTransportFailure for what this cost when it did.
+		if isTlsTransportFailure(err) {
+			roslog.W("pinned TLS probe to Nodeward 9191 failed at the transport layer, not on certificate verification; deferring to the reachability checks", err, "addr", addr)
+			return nil
+		}
 		cdnHost := netCDNHost()
 		if cdnHost == "" {
 			cdnHost = "<cdn-host>"
