@@ -115,6 +115,18 @@ type statusReport struct {
 	Cert         certStatus   `json:"cert"`
 	Log          logStatus    `json:"log"`
 	Degraded     bool         `json:"degraded"`
+	// ConnectionError is why the Nodeward dial failed. Empty when connected.
+	//
+	// `runos status` used to discard this and print one fixed sentence instead,
+	// so an operator whose node could not resolve the Nodeward host was told to
+	// run `runos register`, which cannot resolve a host either (FCR 148, F16).
+	// The dial path now attaches a resolver diagnosis to that error, and this
+	// field is how the diagnosis reaches the terminal and --json.
+	ConnectionError string `json:"connectionError,omitempty"`
+	// connectionRemedied is true when ConnectionError already names its own
+	// repair, so failForDegraded must not append a generic one that contradicts
+	// it. Unexported: it steers rendering and is not part of the JSON contract.
+	connectionRemedied bool
 }
 
 // getCertificateExpiration reads the mTLS certificate and returns expiration info
@@ -246,8 +258,11 @@ func gatherReport() statusReport {
 	r.Connected = connected
 	if !connected {
 		r.Degraded = true
+		if connErr != nil {
+			r.ConnectionError = connErr.Error()
+			r.connectionRemedied = errors.Is(connErr, backend.ErrNodewardDNS)
+		}
 	}
-	_ = connErr // surfaced by the human renderer; JSON exposes Connected/Degraded.
 
 	// Kubernetes.
 	r.K8s.Installed = k8s.IsInstalled()
@@ -350,6 +365,62 @@ func displayStatus() error {
 	return nil
 }
 
+// connectionDetail is the full dial error, printed once by the human block.
+//
+// Before FCR 148 F16 `runos status` discarded that error and printed one fixed
+// sentence, so an operator whose node could not resolve the Nodeward host was
+// told to run `runos register`. That command resolves the same host, so it fails
+// the same way. The dial path now attaches a resolver diagnosis to the error and
+// this is where the operator reads it.
+func connectionDetail(r statusReport) string {
+	if r.ConnectionError != "" {
+		return r.ConnectionError
+	}
+	return fmt.Sprintf("could not establish an mTLS stream to %s", r.NodewardHost)
+}
+
+// connectionSummary is the short cause and remedy for the canonical Fail block.
+//
+// It stays short deliberately. renderHuman prints connectionDetail immediately
+// above, so repeating a multi-sentence diagnosis inside "Cause:" would print the
+// same paragraph twice and bury the block it belongs to. Pure, so both choices
+// are testable without capturing roslog's stderr.
+func connectionSummary(r statusReport) (cause, remedy string) {
+	cause = fmt.Sprintf("could not establish an mTLS stream to %s", r.NodewardHost)
+
+	switch {
+	case r.connectionRemedied:
+		// A proven name-resolution fault. `runos register` has to resolve the
+		// same host, so offering it here would send the operator in a circle.
+		cause = fmt.Sprintf("this node could not resolve %s, so the mTLS stream never opened", r.NodewardHost)
+		remedy = "follow the DNS check and repair printed above"
+	case r.ConnectionError != "":
+		// Never offer `runos preflight` here. It is an INSTALL-time gate, and
+		// `runos status` only runs on a node that is already installed. Its
+		// blocking `ports-free` check fails on every such node, because kubelet
+		// holds 10250 (and a control plane holds 6443). Measured by binding
+		// 10250 and calling checkPortsFree: "required ports already in use:
+		// 10250/tcp (kubelet) ... REBOOT THE NODE", reported as BLOCKED and
+		// closed with "nothing has been installed". Both sentences are false
+		// on an installed node, and neither touches the connection fault.
+		//
+		// `runos test` is the installed-node equivalent: it re-runs the
+		// Nodeward connection step by step and separates a reachable server on
+		// TCP 9191 from an unreachable one on 9192 (cmd/test/root.go:24-33).
+		// It needs root, because it reads the mTLS material under /etc/runos.
+		// `resolvectl query` is read-only, needs no root, and names the address
+		// and the link the dial actually used, which catches a host that
+		// resolves to a stale address.
+		remedy = "run `sudo runos test` to find which step of the Nodeward connection fails"
+		if r.NodewardHost != "" {
+			remedy += fmt.Sprintf(". Run `resolvectl query %s` to see the address and link the host resolves to", r.NodewardHost)
+		}
+	default:
+		remedy = "check network reachability and that `runos register` has been run on this node"
+	}
+	return cause, remedy
+}
+
 // failForDegraded emits a single canonical Fail block describing the most
 // actionable hard failure and returns the already-reported error.
 func failForDegraded(r statusReport) error {
@@ -367,11 +438,8 @@ func failForDegraded(r statusReport) error {
 			"run `runos certificate renew` to obtain a fresh certificate",
 		)
 	case !r.Connected:
-		return roslog.Fail(
-			"connect to Nodeward",
-			fmt.Sprintf("could not establish an mTLS stream to %s", r.NodewardHost),
-			"check network reachability and that `runos register` has been run on this node",
-		)
+		cause, remedy := connectionSummary(r)
+		return roslog.Fail("connect to Nodeward", cause, remedy)
 	default:
 		return roslog.AlreadyReported(errors.New("node agent status is degraded"))
 	}
@@ -395,7 +463,9 @@ func renderHuman(r statusReport) {
 		roslog.Printf("  ✓ Connected to Nodeward: %s\n", r.NodewardHost)
 	} else {
 		roslog.Printf("  ✗ Not connected to Nodeward: %s\n", r.NodewardHost)
-		fmt.Fprintf(os.Stderr, "  could not establish an mTLS stream to %s; run `runos register` if this node is not registered\n", r.NodewardHost)
+		// The detail only. failForDegraded prints the "Try:" line right after,
+		// so a remedy here would be the third copy of the same instruction.
+		fmt.Fprintf(os.Stderr, "  %s\n", connectionDetail(r))
 	}
 	roslog.Printf("\n")
 

@@ -274,6 +274,14 @@ func checkOutboundUdpForWireguard() error {
 		cause)
 }
 
+// nwPrimaryPrivateIPv4Fn and nwExternalIPFn are the seams the NAT-collision check calls through,
+// so a test can stand in a fake and prove the printed remedy without a NAT. The value of this
+// check is the remedy text, so the text has to be reachable from a test.
+var (
+	nwPrimaryPrivateIPv4Fn = nwPrimaryPrivateIPv4
+	nwExternalIPFn         = commons.GetExternalIPAddress
+)
+
 // checkNATEndpointCollision detects that this node sits behind NAT (its primary
 // RFC1918 interface address differs from its detected public IP) and warns about
 // the WireGuard endpoint-collision foot-gun: WireGuard keys peers by their public
@@ -282,14 +290,50 @@ func checkOutboundUdpForWireguard() error {
 // is a WARN: a single node behind NAT is perfectly fine and peers cannot be
 // enumerated at preflight. Returns nil when the node is directly routable or the
 // public IP cannot be determined (inconclusive must not block).
+//
+// THE REMEDY IS ORDERED, and the message says so (FCR 148, F8). Preflight runs
+// BEFORE `runos register` in the installer, so this node has no nid yet and the
+// control plane refuses `clusters networks join` with a 409 until it does. The
+// network itself is cluster-scoped, so `clusters networks create` IS runnable
+// now. Printing both commands without that split sent operators to a command
+// that could only fail at the moment they read it.
+//
+// THE REMEDY NEEDS EVERY NODE BEHIND THE NAT, and the message says that too.
+// Endpoint resolution reads a self-join over network_memberships
+// (nodeward/persist/network/shared.go:53-61: m1 JOIN m2 ON m2.network_id =
+// m1.network_id AND m2.nid <> m1.nid WHERE m1.nid = ?), so a membership held by
+// ONE node returns zero rows for both peers, rule 2 in
+// nodeward/persist/node/endpoint.go never fires, and the collision stays. An
+// earlier draft called the single join "the whole remedy", which was a no-op
+// instruction. Confirmed on hardware 2026-08-23: WireGuard peered over the LAN
+// address only after BOTH lab nodes held a membership in one network.
+//
+// THE RECOVERY PATH IS `sudo runos install`, NOT THE INSTALLER SCRIPT. An
+// earlier draft told the operator to re-run the installer, which cannot work on
+// a node that has already registered: the registration token inside it is
+// single-use (nodeward/persist/rtoken/special.go:15 stamps spent_at and
+// find_by.go:11 then skips it) and lasts 20 minutes (add.go:22), so register
+// exits non-zero and templates/install.sh:231 stops the run. Worse, the obvious
+// way out of that dead end undoes the remedy: a fresh join command mints a NEW
+// nid (rtoken/add.go:11), so the membership made in step 3 stays on the old nid
+// and the collision returns with every call still reporting success. The
+// message therefore names the node-agent command instead, which is what the
+// agent's own failure hints already tell operators to re-run
+// (cmd/install/root.go:80,86,93).
+//
+// THE PRINTED CLI COMMANDS DO NOT RUN ON THIS NODE. cmd/root.go registers only
+// the node-agent subcommands, so `runos clusters ...` on this box answers
+// `unknown command "clusters" for "runos"`. The message names where each command
+// runs, because an operator standing on the node reads "the runos CLI" as the
+// binary that just printed the warning.
 func checkNATEndpointCollision() error {
-	ifaceIP := nwPrimaryPrivateIPv4()
+	ifaceIP := nwPrimaryPrivateIPv4Fn()
 	if ifaceIP == "" {
 		// No RFC1918 primary -> node is likely directly addressed; nothing to warn.
 		return nil
 	}
 
-	extIP, err := commons.GetExternalIPAddress()
+	extIP, err := nwExternalIPFn()
 	if err != nil || strings.TrimSpace(extIP) == "" {
 		// Can't determine public IP (no egress to the IP echo services, or
 		// offline). Inconclusive -> do not warn.
@@ -303,7 +347,31 @@ func checkNATEndpointCollision() error {
 		return nil
 	}
 
-	return fmt.Errorf("this node is behind NAT (private %s vs public %s)\n\nWireGuard identifies peers by their public UDP endpoint. If you place more than one RunOS node behind this same NAT/public IP, their tunnels collide and only one stays up, and same-NAT peers also need NAT hairpin support. A single node behind NAT is fine.\n\nThe RunOS remedy, when the nodes CAN reach each other privately (one LAN, or guests on one VM host): declare that path and RunOS gives each peer the private address instead of the shared public one.\n  runos clusters networks create --cid <cid> --name <network-name> --json   # prints the network id\n  runos clusters networks join --cid <cid> --network-id <networkId> --nid <nid> --address %s\nDeclaring the network is the whole remedy. Only add this if the node has NO inbound path at all, because it also REMOVES the node from the cluster public DNS record:\n  runos nodes ingress <nid> --cid <cid> --no-public-ingress\nProven on a two-node nested cluster 2026-08-18 and again 2026-08-19 (goal 28). Otherwise give each node a distinct routable IP, or a distinct inbound UDP 51820 port-forward per node.\nThis is a networking heads-up, not a RunOS limitation.",
+	return fmt.Errorf("this node is behind NAT (private %s vs public %s)\n\n"+
+		"WireGuard identifies peers by their public UDP endpoint. If you place more than one RunOS node behind this same NAT/public IP, their tunnels collide and only one stays up, and same-NAT peers also need NAT hairpin support. A single node behind NAT is fine.\n\n"+
+		"The RunOS remedy, when the nodes CAN reach each other privately (one LAN, or guests on one VM host): declare that path and RunOS gives each peer the private address instead of the shared public one.\n\n"+
+		"WHERE THESE COMMANDS RUN. The printed commands that start with 'sudo runos' are node-agent commands, and they run on THIS node. Every other printed command is a RunOS CLI command. The 'runos' on THIS node does NOT have those: it answers 'unknown command \"clusters\" for \"runos\"'. Run them from a workstation that has the RunOS CLI installed, or from the console.\n\n"+
+		"Run the remedy in this order. Each step says when it becomes runnable:\n"+
+		"  1. NOW, before or during this install. Create ONE network for this NAT. It needs only the cluster, so it works before this node exists, and creating a network that already exists returns the existing one:\n"+
+		"       runos clusters networks create --cid <cid> --name <network-name> --json   # prints the network id\n"+
+		"  2. AFTER this node has REGISTERED, read the node's nid. You may already hold it: the nid is reserved when you generate the join command. What register creates is the node ROW, and the control plane has no row for that nid until this node registers. On THIS node, after register:\n"+
+		"       sudo runos status                                                         # prints \"Node ID (NID)\"\n"+
+		"     From elsewhere, list the cluster and match the row by its hostname column:\n"+
+		"       runos nodes list --cid <cid>                                              # prints EVERY node, not just this one\n"+
+		"  3. Join EVERY node behind this NAT to the SAME network, each at its own private address. A membership on ONE node alone changes NOTHING: RunOS hands out the private address only when BOTH peers hold a membership in one network, so joining this node and stopping leaves the collision in place. For this node:\n"+
+		"       runos clusters networks join --cid <cid> --network-id <networkId> --nid <nid> --address %s\n"+
+		"     The control plane REFUSES this join with a 409 until that node has registered, because it looks the nid up inside the cluster first. That refusal is the reason for the order, not a fault.\n"+
+		"     Check the member set before you stop, and confirm every node behind this NAT is listed. Use --json: the default table collapses the members column to '[N entries]' and hides the nids:\n"+
+		"       runos clusters networks list --cid <cid> --json                           # prints each network with its members' nids and addresses\n"+
+		"     Each join takes effect at once: the control plane re-sends the peer list to the whole cluster, so no agent restart and no manual VPN sync is needed.\n"+
+		"  4. AFTER registration as well, and it needs the nid from step 2. Add this ONLY if the node has NO inbound path at all, because it also REMOVES the node from the cluster public DNS record:\n"+
+		"       runos nodes ingress <nid> --cid <cid> --no-public-ingress\n"+
+		"  5. ONLY IF this install has already gone past this check. THE INSTALLER DOES NOT WAIT for you: it runs register, and then the Kubernetes install, straight after this warning. Steps 1 to 3 still work on a node that is already installed. Do them for EVERY node behind this NAT first. Then, if this node already ran the Kubernetes join over the colliding endpoint or failed there, redo the install on THIS node. It runs only after register, because it needs the certificates register wrote:\n"+
+		"       sudo runos install                                                        # redoes WireGuard, VPN sync and the Kubernetes join\n"+
+		"     Do NOT re-run the installer script on a node that has already registered. Its registration token is single-use and lasts about 20 minutes, so register fails and the run stops before the install.\n"+
+		"     Do NOT generate a new join command to get past that. A new join command mints a NEW nid. Your step 3 membership stays on the OLD nid, so the collision comes back while every command still reports success.\n\n"+
+		"Proven on a two-node nested cluster 2026-08-18 and again 2026-08-19 (goal 28), and again on two lab nodes 2026-08-23: WireGuard peered over the LAN address only after BOTH nodes had registered and joined ONE network at their LAN addresses. Otherwise give each node a distinct routable IP, or a distinct inbound UDP 51820 port-forward per node.\n"+
+		"This is a networking heads-up, not a RunOS limitation.",
 		ifaceIP, extIP, ifaceIP)
 }
 

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
+	"net"
 	"os"
 	"time"
 )
@@ -122,6 +123,13 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	if err != nil {
 		// Transient connect failure: return the error so the caller can back off
 		// and re-dial instead of crashing the process.
+		//
+		// A node whose per-link DNS scopes were cleared and never replaced fails
+		// here with a bare "context deadline exceeded", which never mentions DNS
+		// and gives the operator no next step. Attach the resolver diagnosis when
+		// the Nodeward host does not resolve, so the log names the real fault and
+		// the command that repairs it. The original error stays wrapped.
+		err = explainNodewardDialFailure(config.GetNodewardHost(), err, net.DefaultResolver.LookupHost)
 		roslog.W("did not connect to nodeward L2", err)
 		return nil, nil, nil, nil, err
 	}

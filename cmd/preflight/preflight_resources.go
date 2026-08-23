@@ -612,25 +612,27 @@ func resEntropyDaemonActive() bool {
 	return false
 }
 
-// checkEtcdDiskFsyncLatency warns (only) when the disk backing /var/lib/etcd is
-// too slow for etcd: it micro-benchmarks fsync latency and flags network
-// filesystems. Prevents the hard-to-diagnose control-plane instability where
-// etcd leader elections flap and kubeadm fails to bootstrap because the data
-// disk (HDD, throttled burst volume, or NFS) cannot meet etcd's <10ms fsync
-// target. Warn-only due to benchmark variance.
+// checkEtcdDiskFsyncLatency warns (only) when the disk that will back
+// /var/lib/etcd is too slow for etcd: it micro-benchmarks fsync latency and
+// flags network filesystems. A data disk that misses etcd's <10ms fsync target
+// (HDD, throttled burst volume, NFS) makes leader elections flap and kubeadm
+// fail to bootstrap, and it put a three-member control plane into a permanent
+// crashloop once all three members shared one backing device (FCR 147). Both
+// branches state the same consequence, because both describe the same fault.
+// Warn-only due to benchmark variance.
+//
+// SCOPE LIMIT, deliberate. Preflight does not know the node's role: install.sh
+// runs it before `runos register`, and the control-plane role is carried by the
+// registration token and resolved server-side. So the text is written for a node
+// of unknown role. It tells the operator not to make THIS node a control plane,
+// and it never prescribes a topology for a cluster this check never measured.
 func checkEtcdDiskFsyncLatency() error {
 	dir := resNearestExisting("/var/lib/etcd")
 
 	// 1. Network/overlay filesystem is an immediate (non-benchmark) red flag.
 	if m, ok := resMountFor(dir, resReadMounts()); ok {
-		switch {
-		case strings.HasPrefix(m.fsType, "nfs"), m.fsType == "cifs", m.fsType == "smb",
-			m.fsType == "smbfs", m.fsType == "fuse.glusterfs", m.fsType == "ceph":
-			return fmt.Errorf(
-				"the disk backing /var/lib/etcd is a network filesystem (%s at %s)\n\n"+
-					"etcd will be unstable: leader elections flap and the control plane may fail to bootstrap.\n"+
-					"Use a LOCAL SSD/NVMe (not NFS/CIFS/Gluster/Ceph) for the etcd data directory, then re-run.\n"+
-					"Storage-performance prerequisite, not a RunOS error.", m.fsType, m.mountPoint)
+		if err := resNetworkFsWarning(m); err != nil {
+			return err
 		}
 	}
 
@@ -644,12 +646,87 @@ func checkEtcdDiskFsyncLatency() error {
 	if p99 <= 10*time.Millisecond {
 		return nil
 	}
+	return resSlowFsyncWarning(p99, dir)
+}
+
+// resNetworkFsWarning is the user-facing text for an etcd data directory that
+// sits on a network filesystem. It returns nil for every other filesystem type.
+//
+// Split out of checkEtcdDiskFsyncLatency for the same reason as
+// resSlowFsyncWarning: the branch only fires on a real nfs/cifs/gluster/ceph
+// mount under /var/lib/etcd, which a test runner does not have, so the wording
+// and the fsType list were otherwise unguarded and free to drift away from the
+// slow-disk branch.
+func resNetworkFsWarning(m resMountInfo) error {
+	switch {
+	case strings.HasPrefix(m.fsType, "nfs"), m.fsType == "cifs", m.fsType == "smb",
+		m.fsType == "smbfs", m.fsType == "fuse.glusterfs", m.fsType == "ceph":
+	default:
+		return nil
+	}
 	return fmt.Errorf(
-		"the disk backing /var/lib/etcd is slow (measured fsync p99 ~%.0f ms; etcd needs < 10 ms)\n\n"+
-			"etcd will be unstable: leader elections flap and the control plane may fail to bootstrap.\n"+
-			"Use a local SSD/NVMe (not an HDD, a throttled burst volume, or NFS) for the etcd data directory,\n"+
-			"then re-run. Storage-performance prerequisite, not a RunOS error.",
-		float64(p99.Microseconds())/1000.0)
+		"the disk backing /var/lib/etcd is a network filesystem (%s at %s)\n\n"+
+			"etcd will be unstable on this filesystem: leader elections flap and kubeadm can fail\n"+
+			"to bootstrap. A network filesystem puts a network round trip inside every fsync, so it\n"+
+			"usually misses etcd's < 10 ms fsync target.\n\n"+
+			"%s", m.fsType, m.mountPoint, resFsyncConsequence)
+}
+
+// resFsyncConsequence is the tail both etcd-fsync findings end with: what a
+// too-slow etcd data disk costs the operator, and what to do about it.
+//
+// Every sentence here has to hold across the whole firing range, which starts
+// just above 10 ms and has no upper bound, and on a node of unknown role. So it
+// promises NOTHING in either direction. It does not say a topology runs
+// "normally" (the first draft did, and it was still true-sounding at 500 ms),
+// and it does not say a topology is impossible (the second draft said the
+// cluster "cannot carry more than one control plane", which FCR 147 itself
+// disproves: that cluster carried two). It reports what was MEASURED, names the
+// RISK as unmeasured, and scopes its directive to THIS node.
+//
+// The mechanism is stated as fsync WORK, not as a latency multiplier. Raft
+// commits on a quorum, floor(n/2)+1 (conductor/src/etcd/guardrails.ts), and the
+// members fsync in parallel on their own devices, so commit latency is roughly
+// the slower disk of the quorum plus a round trip, never a sum. What each added
+// control plane really adds is one more fsync per write across the cluster, and
+// FCR 147 collapsed because all three members sat on ONE backing device
+// (LINSTOR replicated-2 on ftb1's SAS spindles, under nested guests), so that
+// added work landed on the same spindles and every fsync got slower.
+const resFsyncConsequence = "" +
+	"Do not make this node a control plane while etcd's data directory stays on this storage.\n" +
+	"Every etcd write commits only after a quorum of members has fsynced it, so each control plane\n" +
+	"you add makes one more member fsync every write. When those members share one backing device\n" +
+	"(nested guests on one host disk, or one replicated volume), the added work lands on the same\n" +
+	"device and every fsync gets slower.\n" +
+	"Measured in FCR 147: three control planes on one SAS array held\n" +
+	"etcd_disk_backend_commit_duration_seconds at 12.7 ms average. The kube-apiserver then missed its\n" +
+	"handler deadline on almost every request, and all three apiservers crashlooped. Nothing in that\n" +
+	"failure names the storage.\n" +
+	"That cluster carried one control plane, and then two, and it collapsed when the third joined.\n" +
+	"This check measures one node, not a cluster. It cannot tell you how many control planes your\n" +
+	"cluster survives on this storage. It can tell you that this storage failed the check, and that\n" +
+	"nobody has measured what a second or a third control plane does on top of it.\n" +
+	"Put the etcd data directory on a local SSD/NVMe: not an HDD, a throttled burst volume, or a\n" +
+	"network filesystem. Then re-run.\n" +
+	"Storage-performance prerequisite, not a RunOS error."
+
+// resSlowFsyncWarning is the user-facing text for a measured fsync p99 above
+// etcd's 10 ms target. Split out from the check so the wording can be tested
+// without a slow disk under the test runner.
+//
+// dir is the directory actually benchmarked. /var/lib/etcd does not exist before
+// kubeadm runs, so resNearestExisting usually hands back /var or /, and the
+// message names what it measured instead of implying it measured the etcd path.
+//
+// One decimal place, not zero: %.0f printed a 10.4 ms reading as "~10 ms", which
+// reads as meeting the stated < 10 ms target while the body says the disk is
+// unfit.
+func resSlowFsyncWarning(p99 time.Duration, dir string) error {
+	return fmt.Errorf(
+		"the disk backing /var/lib/etcd is slow (measured fsync p99 ~%.1f ms at %s; etcd needs < 10 ms)\n\n"+
+			"etcd will be unstable on this disk: leader elections flap and kubeadm can fail to bootstrap.\n\n"+
+			"%s",
+		float64(p99.Microseconds())/1000.0, dir, resFsyncConsequence)
 }
 
 // resFsyncP99 writes n 4KB blocks to a temp file under dir, fsync'ing each, and

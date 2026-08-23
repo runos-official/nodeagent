@@ -9,6 +9,66 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+### Fixed
+
+- **The slow-disk preflight warning reported a measurement and no consequence** (FCR 147, measured
+  on real hardware 2026-08-22). Preflight's `etcd-fsync` check warned:
+
+  ```
+  WARNING [etcd-fsync]: the disk backing /var/lib/etcd is slow
+  (measured fsync p99 ~12 ms; etcd needs < 10 ms)
+  ```
+
+  RunOS then allowed the install, which is correct. Nothing told the operator what the number
+  meant. The cluster ran on one control plane and on two. It collapsed when a third control plane
+  joined and stayed collapsed: `etcd-status` read quorum 0/3, all three kube-apiservers exited on
+  missed handler deadlines, and the API became unreachable. `etcd_disk_backend_commit_duration_seconds`
+  averaged 12.7 ms on that storage, three nested guests on one SAS array. Nothing at collapse time
+  named the disk, and the install warning had scrolled away forty minutes earlier.
+
+  The warning now states the consequence and a node-scoped action: do not make this node a control
+  plane while etcd's data directory stays on this storage. It names the added fsync work each
+  control plane brings, the shared-backing-device condition that turns that work into latency, and
+  the measured field numbers. It keeps the instability finding it always had, so a far-slower disk
+  is not reassured. It promises no outcome in either direction: the check fires at any p99 above
+  10 ms with no upper bound and measures one node, so the text reports what FCR 147 measured, says
+  it cannot tell the operator how many control planes their cluster survives, and names each added
+  control plane as a risk nobody has measured. The network-filesystem branch of the same check now
+  carries the same consequence, and the measured p99 prints to one decimal place so a 10.4 ms
+  reading no longer renders as "~10 ms" beside a body calling the disk unfit.
+
+  Still a WARNING, not a refusal. The severity and the 10 ms threshold are unchanged.
+
+- **The NAT-collision preflight warning printed a remedy that did nothing when followed exactly**
+  (FCR 148, F8). The warning fires when a node sits behind NAT, and it told the operator to declare
+  a network and join THIS node to it. Endpoint resolution reads a self-join over
+  `network_memberships`, so it hands out the private address only when BOTH peers hold a membership
+  in one network. A membership on one node alone returned zero rows for both peers, every API call
+  answered success, and the WireGuard tunnels kept colliding on the shared public IP. The warning
+  now says that every node behind the NAT must join the SAME network, that one membership changes
+  nothing, and it prints `runos clusters networks list --cid <cid> --json` so the operator can read
+  the member set back. `--json` is required there, because the default table collapses the members
+  column to `[N entries]` and hides the nids. Confirmed on two lab nodes 2026-08-23: WireGuard
+  peered over the LAN address only after both nodes held a membership.
+
+  The same warning also carried three smaller faults, now fixed. It called its commands "the runos
+  CLI" while the `runos` on a node is the node agent, which answers
+  `unknown command "clusters" for "runos"`; the text now names where each command runs and points
+  at `sudo runos status` for this node's nid, because `runos nodes list` prints every node in the
+  cluster and this warning only fires where several nodes share one NAT. It claimed the node "gets
+  its nid only" at register; the nid is reserved when the join command is generated, and register
+  creates the node ROW. It promised "you restart nothing" while the installer runs register and the
+  Kubernetes install straight after preflight with no pause; the text now says the installer does
+  not wait and scopes the no-restart claim to the peer push. Its recovery step names `sudo runos
+  install`, the node-agent command, and warns against the two paths that look like recovery and are
+  not: the installer script cannot be re-run on a registered node, because its registration token is
+  single-use, and generating a fresh join command mints a NEW nid that leaves the membership on the
+  old one and brings the collision back.
+
+  Verified from source and by running the node agent, not on a live cluster: the printed RunOS CLI
+  commands were checked against the conductor CLI manifest and the CLI flag builder, and were not
+  executed against a control plane.
+
 ## v1.8.0-rc.33
 
 ### Fixed
