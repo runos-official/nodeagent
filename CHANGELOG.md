@@ -9,6 +9,53 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+## v1.8.0-rc.33
+
+### Fixed
+
+- **A transient timeout to nodeward was reported to the operator as a network compromise**
+  (measured twice on real hardware, 2026-08-23). Preflight's `nodeward-tls-pin` check treated every
+  failure of the L1Sec handshake as evidence of interception, so an ordinary TCP i/o timeout
+  produced:
+
+  ```
+  BLOCKED [nodeward-tls-pin]: Reached Nodeward on 9191 but the secure handshake FAILED:
+  read tcp 192.168.0.132:60804->116.203.136.98:9191: i/o timeout
+  ...indicates a TLS-intercepting proxy or a network MITM
+  ```
+
+  The install then stopped and told the operator to exempt seven hosts from TLS inspection. On a
+  network with no proxy at all, that advice cannot succeed, and the real cause was a timeout that
+  cleared on its own: the same install, retried immediately with nothing changed, passed preflight
+  and completed.
+
+  A transport failure is now classified separately from a certificate failure. A timeout, a reset
+  and a refused connection are reported as a WARNING that says the handshake did not complete and
+  suggests a retry. Only an actual certificate or hostname mismatch, which is what pinning exists to
+  detect, still blocks the install and keeps the interception wording.
+
+  Observed on a single-NIC machine, so this is not specific to multi-homed hosts.
+
+- **Uninstall left the containerd image store on disk, so a reset never reclaimed it**
+  (measured on both lab machines, 2026-08-23). After a full `clusters reset`, both nodes came back
+  correctly bare by every other measure, with no `kubelet.conf` and no running containers, while
+  `/var/lib/containerd` still held 7.2 GB on one machine and 3.0 GB on the other. Rebuilding a node
+  did not reclaim it either: a freshly installed node started life with the previous cluster's image
+  layers still on disk, so the cost compounded with every reset cycle.
+
+  Uninstall now wipes the runtime data directories along with the rest of the node's state.
+
+- **A peer on the same LAN was routed through the tunnel instead of over the wire.** Route planning
+  did not exclude prefixes the node is already directly connected to, so a directly reachable
+  neighbour could be sent through WireGuard, which is both slower and fragile. Peer routes now skip
+  any prefix that is already connected on another interface, covering both a neighbour's address and
+  the node's own pool address.
+
+### Testing
+
+- Session terminals are now measured per terminal, rather than only asserting that the node survives
+  them.
+
 ## v1.8.0-rc.32
 
 ### Fixed
