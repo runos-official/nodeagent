@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// R6 (2026-08-16, cluster ede). One control plane of three was hard powered off.
+// R6 (2026-08-16, a test cluster). One control plane of three was hard powered off.
 // Within two minutes RunOS marked the two SURVIVING control planes not_ready with
 // isCp=false, because every read in the heartbeat path went through the agent's
 // own kube proxy. The proxy had no live target, the reads failed, and IsCP /

@@ -511,8 +511,8 @@ func checkNodewardHighPortVs443() error {
 // isTlsTransportFailure says whether a failed handshake failed at the TRANSPORT layer rather than
 // at certificate verification.
 //
-// MEASURED on ftb1 2026-08-22. A join was BLOCKED by this check with "the secure handshake FAILED:
-// read tcp 192.168.0.226:52618->116.203.136.98:9191: i/o timeout", and told the operator it
+// MEASURED on a lab box 2026-08-22. A join was BLOCKED by this check with "the secure handshake
+// FAILED: read tcp 198.51.100.226:52618->203.0.113.98:9191: i/o timeout", and told the operator it
 // indicated "a TLS-intercepting proxy or a network MITM", with a remedy of exempting hosts from
 // TLS inspection. Checked by hand seconds later: TCP connect succeeded and an openssl s_client
 // handshake CONNECTED and returned the chain; the identical command then succeeded on retry with

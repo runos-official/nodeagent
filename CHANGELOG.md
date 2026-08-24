@@ -130,7 +130,7 @@ as the GitHub release notes, so every released version needs a section here.
 
   ```
   BLOCKED [nodeward-tls-pin]: Reached Nodeward on 9191 but the secure handshake FAILED:
-  read tcp 192.168.0.132:60804->116.203.136.98:9191: i/o timeout
+  read tcp 198.51.100.132:60804->203.0.113.98:9191: i/o timeout
   ...indicates a TLS-intercepting proxy or a network MITM
   ```
 
@@ -398,7 +398,7 @@ as the GitHub release notes, so every released version needs a section here.
   nodeward 1.6.0-rc.35). Until now the first node was elected by counting READY control planes, so
   two machines that registered before either had finished installing were BOTH told they were first,
   both ran `kubeadm init`, and RunOS reported one healthy two-node cluster that was two clusters with
-  two CAs (measured on ede 2026-08-17). Nodeward now hands the role to exactly one machine. The agent's
+  two CAs (measured on a test cluster 2026-08-17). Nodeward now hands the role to exactly one machine. The agent's
   half: a node whose install finds no ready control plane to join WAITS for one, asking again every
   15 seconds for up to 30 minutes, when nodeward says so with a `FailedPrecondition` whose message
   starts `WAIT_FOR_CONTROL_PLANE:`; every other error keeps its old meaning. And reporting
@@ -461,7 +461,7 @@ as the GitHub release notes, so every released version needs a section here.
   re-added the peer to clear it. For a NAT'd peer that address is the whole point: the peer dials
   out and the far side learns where from, so the rule fired on a WORKING session every single
   pass.
-  - Measured on cluster ede on 2026-08-17, two home nodes declared `noPublicIngress` and a third
+  - Measured on a test cluster on 2026-08-17, two home nodes declared `noPublicIngress` and a third
     node in Hetzner: over 17.7 minutes the third node held no endpoint for its two peers in 23 of
     62 samples (37 % of the time), across 6 and 7 separate wipe episodes. Each episode destroyed
     the session and took 30 to 70 seconds to re-learn the address from the far side's keepalive,
@@ -484,7 +484,7 @@ as the GitHub release notes, so every released version needs a section here.
   <hostname>` through the agent's own kube proxy. Every one of them returned `false` / `false` /
   `not_ready` when that read failed. Nodeward wrote those values, so its control-plane list
   emptied, every agent's proxy lost its backends, and the remaining nodes reported `false` in
-  turn. Measured on cluster ede on 2026-08-16: one of three control planes was hard powered off
+  turn. Measured on a test cluster on 2026-08-16: one of three control planes was hard powered off
   and within two minutes RunOS marked both SURVIVORS `not_ready` with `isCp=false`, refused VM
   deletes, and broke kubectl through the proxy on every node, while Kubernetes itself stayed
   healthy with etcd quorum.
@@ -536,7 +536,7 @@ as the GitHub release notes, so every released version needs a section here.
   forever and a grandchild cannot keep the output pipes open.
 - **The uninstall removes the VM group pool bridges.** Conductor's `076-vm-group-bridge` persists
   `/etc/systemd/network/90-rvg<gid>.netdev` and `.network`; nothing removed them, so a wiped node
-  still carried the units and the live `rvg*` links with their gateway addresses (measured on ftb1
+  still carried the units and the live `rvg*` links with their gateway addresses (measured on a lab box
   after two full resets). Scoped to the `90-rvg` prefix and to `rvg*` links, so `wg0` and the
   cilium interfaces are never touched.
 
@@ -547,7 +547,7 @@ as the GitHub release notes, so every released version needs a section here.
 - **The control-plane-driven uninstall (`nodes delete`) really reboots the node now.** rc.12 ran
   the uninstall inline and rebooted from a goroutine, but the uninstall's own `systemctl stop runos`
   killed the agent process first, so the reply was never sent and no reboot happened (goal 23
-  review, 2026-08-16; measured on the reset of cluster 8go: every machine wiped, none rebooted).
+  review, 2026-08-16; measured on the reset of a test cluster: every machine wiped, none rebooted).
   The handler now answers at once and runs `runos uninstall --yes` followed by `systemctl reboot`
   in a transient systemd unit that outlives the agent.
 - **`runos uninstall --yes` exits non-zero on a partial wipe** even though it reboots, so a script

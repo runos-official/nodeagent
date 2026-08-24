@@ -36,7 +36,7 @@ const (
 //
 // Conductor's script 076-vm-group-bridge persists one bridge per VM group as
 // 90-rvg<gid>.netdev plus 90-rvg<gid>.network, and nothing in the uninstall knew about them.
-// MEASURED on ftb1 2026-08-16: after two full resets the box still had both unit files and the
+// MEASURED on a lab box 2026-08-16: after two full resets the box still had both unit files and the
 // live rvg* links with the groups' gateway addresses on them, so a re-provisioned node came up
 // owning segments for groups that no longer existed.
 //
@@ -45,12 +45,13 @@ const (
 // the node off its own overlay to clean up a VM bridge.
 // runtimeDataWipeSteps removes the container runtime's DATA, and only its data.
 //
-// MEASURED on ftb2 2026-08-22, and it blocked a rebuild. After `clusters reset` uninstalled
+// MEASURED on a lab box 2026-08-22, and it blocked a rebuild. After `clusters reset` uninstalled
 // Kubernetes and rebooted the box "back to bare", /var/lib/containerd still held 43 GB on a
 // 63 GB root, taking it to 80% full with containerd itself inactive. The immediate rejoin was
 // refused by preflight [disk-space], so a machine that had been a healthy node ten minutes
-// earlier could not be reinstalled. ftb1 carried 32 GB of the same and only escaped because its
-// root is 274 GB, which is exactly why this went unnoticed: it only bites the smaller disk.
+// earlier could not be reinstalled. A second host carried 32 GB of the same and only escaped
+// because its root is 274 GB, which is exactly why this went unnoticed: it only bites the
+// smaller disk.
 //
 // The uninstall already stops containerd and already wipes /etc/kubernetes, /var/lib/kubelet,
 // /var/lib/etcd and the CNI directories. The runtime's own image store was simply missing from
@@ -317,7 +318,7 @@ func Uninstall(full bool) error {
 	// AND CLEAR THE FAILED STATE, after the unit file is gone and the reload has run. systemd keeps
 	// a failed unit in its list even once the fragment is deleted, so `systemctl --failed` showed
 	// `wg-quick@wg0.service not-found failed` and `systemctl is-system-running` answered DEGRADED on
-	// a box RunOS had just wiped clean. Measured on ftb1 2026-08-20, on the very uninstall that was
+	// a box RunOS had just wiped clean. Measured on a lab box 2026-08-20, on the very uninstall that was
 	// meant to hand back a pristine machine. Same class as G28-F2, on the way out instead of in.
 	step("systemctl reset-failed wg-quick@wg0 || true")
 	roslog.Println("done")

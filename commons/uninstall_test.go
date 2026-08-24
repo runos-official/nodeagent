@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// R4, measured on ftb1 2026-08-16: after `runos uninstall` (and after the control-plane-driven
+// R4, measured on a lab box 2026-08-16: after `runos uninstall` (and after the control-plane-driven
 // UNINSTALL_NODE) the node still carried /etc/systemd/network/90-rvg<gid>.netdev and .network
 // plus the live rvg* links with their gateway addresses. A re-provisioned box therefore came up
 // owning VM group pool bridges for groups that no longer existed.
@@ -417,11 +417,12 @@ func TestVmGroupFirewallCleanupSteps_RemovesTheCustomerFirewallChains(t *testing
 	}
 }
 
-// Measured on ftb2 2026-08-22. After `clusters reset` uninstalled Kubernetes and rebooted the box
-// "back to bare", /var/lib/containerd still held 43 GB on a 63 GB root (80% full). containerd
+// Measured on a lab box 2026-08-22. After `clusters reset` uninstalled Kubernetes and rebooted
+// the box "back to bare", /var/lib/containerd still held 43 GB on a 63 GB root (80% full). containerd
 // itself was inactive, so the image store was pure orphan. The immediate rejoin was then BLOCKED
 // by preflight [disk-space], so a box that had been a healthy node ten minutes earlier could not
-// be rebuilt. ftb1 carried 32 GB of the same litter and only escaped because its root is 274 GB.
+// be rebuilt. A second host carried 32 GB of the same litter and only escaped because its root is
+// 274 GB.
 //
 // The uninstall already stops containerd before wiping, and already wipes /etc/kubernetes,
 // /var/lib/kubelet, /var/lib/etcd and the CNI dirs. The runtime's own data dir was simply missing

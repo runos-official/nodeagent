@@ -104,7 +104,7 @@ func TestPlanNeverEverHandshakenEndpointIsCleared(t *testing.T) {
 // convergence pass dropped and re-added both peers, destroying a working session and the address
 // with it, roughly every three minutes, for 30 to 70 seconds each time.
 func TestPlanLeavesALiveRoamedEndpointAlone(t *testing.T) {
-	current := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: fresh()}}
+	current := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: fresh()}}
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
 
 	plan := plan(current, desired)
@@ -120,7 +120,7 @@ func TestPlanLeavesALiveRoamedEndpointAlone(t *testing.T) {
 func TestPlanClearsARoamedEndpointOnceItsSessionDies(t *testing.T) {
 	// The other half of the rule: leaving a live address alone must not become leaving every
 	// address alone, or the declaration stops converging again.
-	current := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: stale()}}
+	current := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: stale()}}
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
 
 	if plan := planTwice(current, desired); len(plan.Remove) != 1 {
@@ -256,7 +256,7 @@ func TestParseWgDumpTreatsAnUnreadableHandshakeAsNever(t *testing.T) {
 // session's handshake age cycles up to about 120 s and back; the liveness window has to sit above
 // that. Written as a LITERAL age, so it fails if the window is ever narrowed below it.
 func TestPlanLeavesAHealthySessionAloneAtItsOldest(t *testing.T) {
-	current := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: justBeforeRekey()}}
+	current := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: justBeforeRekey()}}
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
 
 	if plan := planTwice(current, desired); len(plan.Remove) != 0 {
@@ -291,7 +291,7 @@ func TestPlanClearsAnEndpointWeAppliedTheMomentTheDeclarationChanges(t *testing.
 // A ROAMED endpoint is the opposite case and must survive the same liveness reading.
 func TestPlanKeepsARoamedEndpointWeNeverApplied(t *testing.T) {
 	memory := NewPeerMemory()
-	current := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: fresh()}}
+	current := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: fresh()}}
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
 
 	memory.Plan(current, desired, testNow)
@@ -304,7 +304,7 @@ func TestPlanKeepsARoamedEndpointWeNeverApplied(t *testing.T) {
 // do with the peer.
 func TestPlanNeedsTwoDeadReadingsBeforeClearingARoamedEndpoint(t *testing.T) {
 	memory := NewPeerMemory()
-	current := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: stale()}}
+	current := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: stale()}}
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
 
 	if first := memory.Plan(current, desired, testNow); len(first.Remove) != 0 {
@@ -320,8 +320,8 @@ func TestPlanNeedsTwoDeadReadingsBeforeClearingARoamedEndpoint(t *testing.T) {
 func TestPlanResetsTheDeadCountWhenTheSessionComesBack(t *testing.T) {
 	memory := NewPeerMemory()
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
-	dead := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: stale()}}
-	live := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: fresh()}}
+	dead := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: stale()}}
+	live := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: fresh()}}
 
 	memory.Plan(dead, desired, testNow)
 	memory.Plan(live, desired, testNow)
@@ -339,7 +339,7 @@ func TestPlanResetsTheDeadCountWhenTheSessionComesBack(t *testing.T) {
 func TestPlanIgnoresAHandshakeFromTheFuture(t *testing.T) {
 	memory := NewPeerMemory()
 	future := map[string]WgPeerState{
-		peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: testNow.Add(1 * time.Hour).Unix()},
+		peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: testNow.Add(1 * time.Hour).Unix()},
 	}
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
 
@@ -354,9 +354,9 @@ func TestPlanIgnoresAHandshakeFromTheFuture(t *testing.T) {
 func TestPlanHoldsTheDeadCountThroughAnUnbelievableReading(t *testing.T) {
 	memory := NewPeerMemory()
 	desired := []WgPeer{{PubKey: peerA, AllowedIP: "10.0.0.1", EndpointIP: ""}}
-	dead := map[string]WgPeerState{peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: stale()}}
+	dead := map[string]WgPeerState{peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: stale()}}
 	future := map[string]WgPeerState{
-		peerA: {Endpoint: "169.1.210.215", LastHandshakeUnix: testNow.Add(1 * time.Hour).Unix()},
+		peerA: {Endpoint: "203.0.113.215", LastHandshakeUnix: testNow.Add(1 * time.Hour).Unix()},
 	}
 
 	memory.Plan(dead, desired, testNow)

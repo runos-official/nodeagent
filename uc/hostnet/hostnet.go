@@ -59,7 +59,7 @@ func Collect() []string {
 // interfaceNetworks reads addresses from the standard library rather than by shelling out, so the
 // common case needs no external binary at all.
 //
-// It reports the NETWORK, not the address: 192.168.0.225/24 becomes 192.168.0.0/24, which is what
+// It reports the NETWORK, not the address: 198.51.100.225/24 becomes 198.51.100.0/24, which is what
 // a range has to be compared against.
 func interfaceNetworks() []string {
 	ifaces, err := net.Interfaces()

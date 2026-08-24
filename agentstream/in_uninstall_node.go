@@ -24,7 +24,7 @@ const uninstallStartDelaySeconds = 3
 // `systemctl stop runos`, which SIGTERMs this very process (KillMode=control-group),
 // so the response was never sent and the goroutine died before it rebooted. Nodeward
 // treated the silence as "offline" and the box kept an orphaned kube-apiserver when
-// `kubeadm reset` had failed. Measured on the goal 23 reset of 8go, 2026-08-16: every
+// `kubeadm reset` had failed. Measured on the goal 23 reset of a test cluster, 2026-08-16: every
 // machine was wiped, none rebooted by itself.
 //
 // So the work moves out of the agent's cgroup: `runos uninstall --yes` runs in a

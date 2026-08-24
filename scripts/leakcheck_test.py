@@ -50,11 +50,13 @@ SECOND_BOX = "ftb" + "2"
 RENTED_BOX = "fttb" + "3"
 ACCOUNT_ID = "rj" + "wrn"
 
-# The two addresses from the real incident: a line of pasted terminal output
-# that shipped in cmd/preflight/tls_failure_kind_test.go. Assembled octet by
-# octet so no dotted quad appears in this file.
-PASTED_SRC = dotted(192, 168, 0, 226)
-PASTED_DST = dotted(116, 203, 136, 98)
+# The SHAPE of the pasted terminal output that shipped in
+# cmd/preflight/tls_failure_kind_test.go: a private source address dialling a
+# public destination. Both are stand-ins, not the addresses from the incident,
+# and neither sits in an allow-listed range, so the catch is still exercised.
+# Assembled octet by octet so no dotted quad appears in this file.
+PASTED_SRC = dotted(10, 0, 0, 226)
+PASTED_DST = dotted(198, 18, 0, 98)
 PASTED_ERROR = "read tcp %s:52618->%s:9191: i/o timeout" % (PASTED_SRC, PASTED_DST)
 GLOBAL_V6 = ":".join(["2606", "4700", "4700"]) + "::" + "1111"
 
@@ -140,7 +142,7 @@ def main() -> int:
     expect_catch("rented box name with digits", "# provisioned %s in fsn1\n" % RENTED_BOX, RENTED_BOX)
     expect_catch("lab box name inside a hyphenated word", "host node-%s-a rebooted\n" % LAB_BOX, LAB_BOX)
     expect_catch("lab box name in mixed case", "Measured on %s.\n" % LAB_BOX.upper(), LAB_BOX)
-    expect_catch("account id in a node name", 'want "n02-ede-%s" in the detail\n' % ACCOUNT_ID, ACCOUNT_ID)
+    expect_catch("account id in a node name", 'want "n02-cl1-%s" in the detail\n' % ACCOUNT_ID, ACCOUNT_ID)
 
     # The already-shipped pasted output, both addresses in one line.
     expect_catch("pasted source address in a shipped test comment", '// "the secure handshake FAILED: %s",\n' % PASTED_ERROR, PASTED_SRC)

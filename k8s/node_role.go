@@ -49,7 +49,7 @@ var (
 // lastKnown holds the most recent SUCCESSFUL reading, so a transient read failure
 // carries the previous role and status instead of inventing a demotion.
 //
-// R6 (2026-08-16, cluster ede): one of three control planes was hard powered off.
+// R6 (2026-08-16, a test cluster): one of three control planes was hard powered off.
 // The heartbeat read the node object through the agent's own kube proxy, the proxy
 // lost its targets, the read failed, and IsCP / IsWorker / GetStatus returned
 // false / false / not_ready. Nodeward wrote those values over the truth, so its

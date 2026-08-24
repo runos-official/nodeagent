@@ -21,12 +21,12 @@ func TestAnAcceptedReportIsAConfirmedClaim(t *testing.T) {
 }
 
 func TestNodewardsRefusalIsARelease(t *testing.T) {
-	err := status.Error(codes.FailedPrecondition, firstNodeClaimReleasedPrefix+"this node no longer holds cluster ede's first-node role, n02-ede-rjwrn does")
+	err := status.Error(codes.FailedPrecondition, firstNodeClaimReleasedPrefix+"this node no longer holds cluster cl1's first-node role, n02-cl1-acct1 does")
 	v, detail := classifyClaimAnswer(err)
 	if v != claimReleased {
 		t.Fatalf("FailedPrecondition with the prefix is a release, got %v", v)
 	}
-	if !strings.Contains(detail, "n02-ede-rjwrn") || strings.HasPrefix(detail, firstNodeClaimReleasedPrefix) {
+	if !strings.Contains(detail, "n02-cl1-acct1") || strings.HasPrefix(detail, firstNodeClaimReleasedPrefix) {
 		t.Fatalf("the detail should be nodeward's reason without the prefix: %q", detail)
 	}
 }

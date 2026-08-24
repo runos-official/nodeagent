@@ -14,14 +14,11 @@
 # Regenerate with: make leakcheck-update
 CHANGELOG.md	ipv4	10.0.0.5
 CHANGELOG.md	ipv4	10.96.0.0
-CHANGELOG.md	ipv4	116.203.136.98
 CHANGELOG.md	ipv4	140.82.121.4
 CHANGELOG.md	ipv4	172.24.0.0
 CHANGELOG.md	ipv4	172.24.200.0
 CHANGELOG.md	ipv4	172.25.0.0
 CHANGELOG.md	ipv4	172.25.0.203
-CHANGELOG.md	ipv4	192.168.0.132
-CHANGELOG.md	name	ftb1
 agentstream/dnsmasq_validate.go	ipv4	1.2.3.4
 agentstream/dnsmasq_validate.go	ipv4	10.0.0.1
 agentstream/validators_test.go	ipv4	1.1.1.1
@@ -65,10 +62,7 @@ cmd/preflight/preflight_identity_test.go	ipv4	172.25.1.0
 cmd/preflight/preflight_identity_test.go	ipv4	172.25.4.10
 cmd/preflight/preflight_identity_test.go	ipv4	192.168.1.0
 cmd/preflight/preflight_net.go	ipv4	1.1.1.1
-cmd/preflight/preflight_net.go	ipv4	116.203.136.98
-cmd/preflight/preflight_net.go	ipv4	192.168.0.226
 cmd/preflight/preflight_net.go	ipv4	8.8.8.8
-cmd/preflight/preflight_net.go	name	ftb1
 cmd/preflight/preflight_net2.go	ipv4	1.1.1.1
 cmd/preflight/preflight_net2.go	ipv4	8.8.8.8
 cmd/preflight/preflight_net2_test.go	ipv4	10.0.0.5
@@ -77,12 +71,8 @@ cmd/preflight/preflight_net2_test.go	ipv4	172.17.0.1
 cmd/preflight/preflight_net2_test.go	ipv4	172.17.0.2
 cmd/preflight/preflight_net2_test.go	ipv4	192.168.122.1
 cmd/preflight/root_test.go	ipv4	1.2.3.4
-cmd/preflight/tls_failure_kind_test.go	ipv4	116.203.136.98
-cmd/preflight/tls_failure_kind_test.go	ipv4	192.168.0.226
-cmd/preflight/tls_failure_kind_test.go	name	ftb1
 cmd/setconfig/root.go	ipv4	192.168.1.100
 commons/failure_classifier.go	ipv4	1.1.1.1
-commons/first_node_claim_test.go	id	rjwrn
 commons/ufw_peer_ranges.go	ipv4	172.24.0.0
 commons/ufw_peer_ranges_test.go	ipv4	10.10.0.0
 commons/ufw_peer_ranges_test.go	ipv4	10.128.252.0
@@ -96,13 +86,8 @@ commons/ufw_peer_ranges_test.go	ipv4	172.24.0.0
 commons/ufw_peer_ranges_test.go	ipv4	172.24.32.0
 commons/ufw_peer_ranges_test.go	ipv4	172.24.32.1
 commons/ufw_peer_ranges_test.go	ipv4	172.24.32.9
-commons/uninstall.go	name	ftb1
-commons/uninstall.go	name	ftb2
-commons/uninstall_test.go	name	ftb1
-commons/uninstall_test.go	name	ftb2
 commons/wireguard_converge_test.go	ipv4	10.0.0.1
 commons/wireguard_converge_test.go	ipv4	10.0.0.2
-commons/wireguard_converge_test.go	ipv4	169.1.210.215
 commons/wireguard_routes.go	ipv4	10.158.31.0
 commons/wireguard_routes.go	ipv4	10.158.31.2
 commons/wireguard_routes_test.go	ipv4	10.128.252.0
@@ -150,8 +135,6 @@ docs/troubleshooting.md	ipv4	172.24.0.0
 docs/troubleshooting.md	ipv4	172.24.200.0
 k8s/remove_member_test.go	ipv4	10.0.0.1
 k8s/remove_member_test.go	ipv4	10.0.0.2
-uc/hostnet/hostnet.go	ipv4	192.168.0.0
-uc/hostnet/hostnet.go	ipv4	192.168.0.225
 uc/hostnet/hostnet_test.go	ipv4	10.128.252.0
 uc/hostnet/hostnet_test.go	ipv4	10.5.5.5
 uc/hostnet/hostnet_test.go	ipv4	10.50.0.0

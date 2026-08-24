@@ -29,7 +29,7 @@ The node agent heartbeat payload gains one field:
 `rolesKnown: false` means the agent could NOT read its node object and is carrying its last known
 role, or deriving `isCp` from the local kubeadm static pod manifest. Nodeward must not write
 `isCp` / `isWorker` from such a heartbeat, because writing `false` over a live control plane is
-what emptied the control-plane list on cluster ede on 2026-08-16.
+what emptied the control-plane list on a test cluster on 2026-08-16.
 
 Decode it as `*bool` and read `nil` as `true`: an agent older than v1.8.0-rc.16 omits the field,
 and `true` is exactly the behaviour those agents already had.

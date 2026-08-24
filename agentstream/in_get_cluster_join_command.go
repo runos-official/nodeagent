@@ -133,10 +133,11 @@ var certKeyMu sync.Mutex
 //	error execution phase control-plane-prepare/download-certs: error downloading certs:
 //	  error decoding secret data with provided key: cipher: message authentication failed
 //
-// Reproduced on khb 2026-08-12 and again on jwn the same day, forty seconds apart. Passing an
-// explicit --certificate-key makes the upload IDEMPOTENT: two joins are handed the same key, the
-// second upload re-encrypts with the key the first is already using, and both decrypt. That
-// removes the race rather than narrowing its window, which is what a check alone can do.
+// Reproduced on one cluster 2026-08-12 and again on a second cluster the same day, forty seconds
+// apart. Passing an explicit --certificate-key makes the upload IDEMPOTENT: two joins are handed
+// the same key, the second upload re-encrypts with the key the first is already using, and both
+// decrypt. That removes the race rather than narrowing its window, which is what a check alone
+// can do.
 func getCertKey() string {
 	certKeyMu.Lock()
 	defer certKeyMu.Unlock()
