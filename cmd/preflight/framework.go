@@ -92,6 +92,11 @@ func runChecks(checks []check) error {
 // operator needs a way past that one check, not past all of preflight. A fatal
 // prerequisite is never skipped: nothing after it is meaningful without it.
 func runChecksSkipping(checks []check, skip map[string]bool) error {
+	// Host facts that more than one check reads are gathered ONCE per run. Dropping the memo here
+	// is what makes "once per run" true rather than "once per process", and it is the reason the
+	// two endpoint checks cannot be handed different answers. See nwEndpointFacts.
+	nwResetEndpointFacts()
+
 	// 1. Fatal prerequisites, fail-fast and in declared order.
 	for _, c := range checks {
 		if !c.fatal {
@@ -242,7 +247,13 @@ func preflightChecks() []check {
 		// the REGISTRY name (report() reads c.name), so a single check cannot rename
 		// itself per branch without changing the framework, and "nat-collision" is a
 		// false label on a multi-homed host. Two entries also give the operator two
-		// independent --skip-check names. Exactly one of the two ever speaks.
+		// independent --skip-check names.
+		//
+		// At most one of the two speaks in a run, and that is structural rather than
+		// likely: both read ONE set of host facts gathered once per run
+		// (nwEndpointFacts), and they branch on opposite answers to the same field.
+		// Until 2026-08-24 each called the public-IP probe itself, and with two
+		// different answers both printed, one screen apart, saying opposite things.
 		{name: "nat-collision", fn: checkNATEndpointCollision, sev: sevWarn, net: true},
 		{name: "multi-homed-endpoint", fn: checkMultiHomedEndpoint, sev: sevWarn, net: true},
 	}

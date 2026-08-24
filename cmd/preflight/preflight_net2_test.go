@@ -70,6 +70,11 @@ func TestNwProbeMirrorConnectionRefused(t *testing.T) {
 const (
 	fixturePrivateIP = "10.0.0.5"
 	fixturePublicIP  = "203.0.113.7"
+	// A second documentation-range public address (RFC 5737 TEST-NET-2), for the shapes where a
+	// local interface HOLDS the externally observed address.
+	fixtureHeldPublicIP = "198.51.100.7"
+	// The interface the fixture private address sits on. A real NIC name, not a bridge.
+	fixturePrivateDev = "enp7s0"
 )
 
 // fakeNATEnv stands in for the two host facts the NAT-collision check reads, so the printed
@@ -96,11 +101,28 @@ func fakeMultiHomedEnv(t *testing.T, privateIP, publicIP, dev string) {
 	fakeEndpointEnv(t, privateIP, publicIP, nil, dev)
 }
 
-// fakeEndpointEnv stands in for the three host facts the endpoint checks read. dev is the local
-// interface that holds publicIP, or "" when no interface does.
+// fakeEndpointEnv stands in for the host facts the endpoint checks read. dev is the local
+// interface that holds publicIP, or "" when no interface does. The private-network candidate set
+// is the single obvious one, privateIP on fixturePrivateDev, whenever privateIP is RFC1918; use
+// fakeEndpointEnvCandidates for the shapes where the candidate set is the thing under test.
+//
+// It drops the memoized facts, because the checks now read one answer per preflight run and a
+// leftover answer from the previous test would decide this one.
 func fakeEndpointEnv(t *testing.T, privateIP, publicIP string, publicErr error, dev string) {
 	t.Helper()
+	var candidates []nwIfaceAddr
+	if ip := net.ParseIP(privateIP); ip != nil && ip.IsPrivate() {
+		candidates = []nwIfaceAddr{{dev: fixturePrivateDev, addr: privateIP}}
+	}
+	fakeEndpointEnvCandidates(t, privateIP, publicIP, publicErr, dev, candidates)
+}
+
+// fakeEndpointEnvCandidates is fakeEndpointEnv with the private-network candidate set supplied, so
+// the bridges-only and more-than-one-candidate shapes are reachable from a test.
+func fakeEndpointEnvCandidates(t *testing.T, privateIP, publicIP string, publicErr error, dev string, candidates []nwIfaceAddr) {
+	t.Helper()
 	origPrivate, origPublic, origIface := nwPrimaryPrivateIPv4Fn, nwExternalIPFn, nwIfaceHoldingIPv4Fn
+	origCandidates := nwPrivateIPv4CandidatesFn
 	nwPrimaryPrivateIPv4Fn = func() string { return privateIP }
 	nwExternalIPFn = func() (string, error) { return publicIP, publicErr }
 	nwIfaceHoldingIPv4Fn = func(addr string) string {
@@ -109,8 +131,12 @@ func fakeEndpointEnv(t *testing.T, privateIP, publicIP string, publicErr error, 
 		}
 		return ""
 	}
+	nwPrivateIPv4CandidatesFn = func() []nwIfaceAddr { return candidates }
+	nwResetEndpointFacts()
 	t.Cleanup(func() {
 		nwPrimaryPrivateIPv4Fn, nwExternalIPFn, nwIfaceHoldingIPv4Fn = origPrivate, origPublic, origIface
+		nwPrivateIPv4CandidatesFn = origCandidates
+		nwResetEndpointFacts()
 	})
 }
 
@@ -379,6 +405,8 @@ func TestNatCollisionStaysSilentWhenThisHostHoldsTheExternalAddressItself(t *tes
 	// Only the two host-fact seams are faked. nwIfaceHoldingIPv4Fn stays REAL, which is the whole
 	// point of this test: it proves the shipped interface-enumeration path answers correctly.
 	origPrivate, origPublic := nwPrimaryPrivateIPv4Fn, nwExternalIPFn
+	nwResetEndpointFacts()
+	t.Cleanup(nwResetEndpointFacts)
 	nwPrimaryPrivateIPv4Fn = func() string { return fixturePrivateIP }
 	nwExternalIPFn = func() (string, error) { return addr, nil }
 	t.Cleanup(func() { nwPrimaryPrivateIPv4Fn, nwExternalIPFn = origPrivate, origPublic })
@@ -540,6 +568,153 @@ func TestNwIfaceHoldingIPv4RejectsAddressesThisHostDoesNotHold(t *testing.T) {
 	for _, addr := range []string{fixturePublicIP, "", "not-an-ip", "::1", "0.0.0.0"} {
 		if dev := nwIfaceHoldingIPv4(addr); dev != "" {
 			t.Errorf("nwIfaceHoldingIPv4(%q) = %q, want \"\" (no interface holds it)", addr, dev)
+		}
+	}
+}
+
+// F1, adversarial review of the 2026-08-24 split. The split gave each branch its OWN call to
+// nwEndpointFacts, so one preflight run probed the public IP TWICE and the two answers were never
+// required to agree. Driven with two different answers, BOTH warnings printed, one screen apart,
+// saying opposite things: nat-collision called the node NAT'd, multi-homed-endpoint said it was
+// NOT behind NAT. Realistic triggers: dual-WAN or failover egress, a rotating CGNAT pool, or a
+// transient failure of the first provider sending the second call to another provider. The first
+// provider is the DUAL-STACK ipify endpoint, so an IPv6-preferring host falls through to provider
+// two routinely.
+//
+// The run goes through the phase runner, because "once per preflight run" is the claim under test.
+func TestOnePreflightRunProbesThePublicIPOnceAndTheTwoBranchesCannotDisagree(t *testing.T) {
+	probes := 0
+	origPrivate, origPublic, origIface := nwPrimaryPrivateIPv4Fn, nwExternalIPFn, nwIfaceHoldingIPv4Fn
+	nwPrimaryPrivateIPv4Fn = func() string { return fixturePrivateIP }
+	nwExternalIPFn = func() (string, error) {
+		probes++
+		if probes == 1 {
+			return fixturePublicIP, nil // no local interface holds it -> the NAT shape
+		}
+		return fixtureHeldPublicIP, nil // pub0 holds it -> the multi-homed shape
+	}
+	nwIfaceHoldingIPv4Fn = func(addr string) string {
+		if addr == fixtureHeldPublicIP {
+			return "pub0"
+		}
+		return ""
+	}
+	t.Cleanup(func() {
+		nwPrimaryPrivateIPv4Fn, nwExternalIPFn, nwIfaceHoldingIPv4Fn = origPrivate, origPublic, origIface
+		nwResetEndpointFacts()
+	})
+
+	var natErr, multiErr error
+	_ = runChecks([]check{
+		{name: "nat-collision", fn: func() error { natErr = checkNATEndpointCollision(); return natErr }, sev: sevWarn, net: true},
+		{name: "multi-homed-endpoint", fn: func() error { multiErr = checkMultiHomedEndpoint(); return multiErr }, sev: sevWarn, net: true},
+	})
+
+	if probes != 1 {
+		t.Errorf("one preflight run must probe the public IP ONCE, got %d probes", probes)
+	}
+	if natErr != nil && multiErr != nil {
+		t.Errorf("the two branches contradicted each other in one run.\nnat-collision:\n%s\n\nmulti-homed-endpoint:\n%s", natErr, multiErr)
+	}
+}
+
+// F4, adversarial review of the 2026-08-24 split. The advisory's runbook was a SILENT NO-OP when
+// followed literally: it printed only THIS node's join. RunOS hands out the private address only
+// when BOTH peers hold a membership in one network, which the NAT branch says loudly, so an
+// operator who ran exactly the two printed commands got no change and both commands reported
+// success. The advisory also never said where <nid> or <networkId> come from, while the NAT branch
+// gives each its own step.
+func TestMultiHomedAdvisoryCannotBeFollowedIntoANoOp(t *testing.T) {
+	fakeMultiHomedEnv(t, fixturePrivateIP, fixturePublicIP, "eth0")
+
+	err := checkMultiHomedEndpoint()
+	if err == nil {
+		t.Fatal("a multi-homed host with a private address must get the advisory")
+	}
+	msg := err.Error()
+
+	// One membership is not a remedy, and the text must say so in its own words.
+	for _, want := range []string{"EVERY node", "SAME network", "BOTH peers hold a membership"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the advisory must say that one membership alone changes nothing; missing %q, got:\n%s", want, msg)
+		}
+	}
+	// Both placeholders the printed commands carry must have a stated source.
+	if !strings.Contains(msg, "The create command prints <networkId>") {
+		t.Errorf("the advisory must say where <networkId> comes from, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "'sudo runos status'") {
+		t.Errorf("the advisory must say where each node's <nid> comes from, got:\n%s", msg)
+	}
+}
+
+// F3, adversarial review of the 2026-08-24 split, proved on real Linux. nwPrimaryPrivateIPv4
+// returns the FIRST RFC1918 address in net.Interfaces() order, which is not "this node's address
+// on the private network". In a container holding eth0=172.17.0.2 (a docker bridge address),
+// pub0=198.51.100.7, virbr0=192.168.122.1 and privnic=10.50.50.4, the advisory printed
+// `--address 172.17.0.2`, the bridge.
+//
+// The advisory now prints a literal address only when exactly ONE candidate interface holds one.
+// With more than one it names the interfaces and lets the operator supply the address, because a
+// guess printed as a literal is what reached the operator.
+func TestMultiHomedAdvisoryPrintsNoAddressItIsNotConfidentAbout(t *testing.T) {
+	bridgeAddr, realAddr := "172.17.0.2", "10.50.50.4"
+	fakeEndpointEnvCandidates(t, bridgeAddr, fixtureHeldPublicIP, nil, "pub0", []nwIfaceAddr{
+		{dev: "eth0", addr: bridgeAddr},
+		{dev: "privnic", addr: realAddr},
+	})
+
+	err := checkMultiHomedEndpoint()
+	if err == nil {
+		t.Fatal("a multi-homed host with private addresses must still get the advisory")
+	}
+	msg := err.Error()
+
+	for _, banned := range []string{"--address " + bridgeAddr, "--address " + realAddr} {
+		if strings.Contains(msg, banned) {
+			t.Errorf("two candidates is a guess, so the advisory must print no literal address; found %q in:\n%s", banned, msg)
+		}
+	}
+	if !strings.Contains(msg, "--address <address>") {
+		t.Errorf("want the join command to carry an <address> placeholder, got:\n%s", msg)
+	}
+	for _, want := range []string{"eth0", "privnic", "ip -4 addr show <interface>"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("want the advisory to name the interfaces and how to read the address; missing %q, got:\n%s", want, msg)
+		}
+	}
+	if lines := strings.Count(msg, "\n") + 1; lines > 10 {
+		t.Errorf("the advisory must stay short in this branch too, got %d lines:\n%s", lines, msg)
+	}
+}
+
+// The other half of F3. A node with a public NIC plus a docker0 or a libvirt virbr0 and NO real
+// private network was given this advisory at all, telling it to declare a network for a bridge
+// address. There is nothing to declare on such a host, so both branches must stay silent.
+func TestMultiHomedAdvisoryStaysSilentWhenEveryPrivateAddressIsABridge(t *testing.T) {
+	fakeEndpointEnvCandidates(t, "172.17.0.1", fixtureHeldPublicIP, nil, "pub0", nil)
+
+	if err := checkMultiHomedEndpoint(); err != nil {
+		t.Errorf("docker0 and virbr0 are not a private network to declare; want silence, got:\n%s", err)
+	}
+	if err := checkNATEndpointCollision(); err != nil {
+		t.Errorf("this host holds its own public address, so it is not behind NAT; want silence, got:\n%s", err)
+	}
+}
+
+// The name test behind the candidate filter. Over-excluding costs silence on an advisory,
+// under-excluding costs a printed address that is wrong, so the plain "br0" case matters: it is
+// commonly the operator's own bridged NIC on a KVM host, which is the private path the advisory is
+// about.
+func TestNwIsBridgeOrVirtualInterface(t *testing.T) {
+	for _, dev := range []string{"docker0", "br-1a2b3c", "virbr0", "veth1234", "vboxnet0", "vmnet1", "cni0", "kube-ipvs0", "wg0", "cilium_host", "dummy0"} {
+		if !nwIsBridgeOrVirtualInterface(dev) {
+			t.Errorf("%q is a bridge or virtual link and must not be a private-network candidate", dev)
+		}
+	}
+	for _, dev := range []string{"eth0", "enp7s0", "ens18", "br0", "bond0", "eno1", "privnic"} {
+		if nwIsBridgeOrVirtualInterface(dev) {
+			t.Errorf("%q can carry a real private network and must stay a candidate", dev)
 		}
 	}
 }

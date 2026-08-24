@@ -39,6 +39,56 @@ as the GitHub release notes, so every released version needs a section here.
 
   Still a WARNING, not a refusal. The severity and the 10 ms threshold are unchanged.
 
+- **A multi-homed node was told it was behind NAT, and that its tunnels would collide** (measured
+  on RunOS dev 2026-08-24). Three cloud servers joined one cluster. Each held its OWN routable
+  address on `eth0` plus a private address on a second NIC for a provider private network. All
+  three were greeted with `this node is behind NAT (private ... vs public ...)` and a warning that
+  their tunnels would collide. Both claims were false: the host holds the public address itself,
+  and three DIFFERENT public addresses cannot collide as WireGuard endpoints. The operator read a
+  security-flavoured alarm about a cluster that was working.
+
+  The `nat-collision` check decided "behind NAT" by comparing the primary RFC1918 address to the
+  externally observed one. It never asked whether this host holds that external address on one of
+  its own interfaces. It now asks, and declines the case when the answer is yes.
+
+  A second advisory check, **`multi-homed-endpoint`**, now owns that case. It states the fact, says
+  RunOS hands peers the public address unless a declared network says otherwise, names what
+  declaring a private network buys, prints `clusters networks create` and `clusters networks join`,
+  and stops. It claims no collision and sends nobody back through an install, because this case is
+  an optimisation and not a repair. Both names are advisory, neither blocks an install, and either
+  can be silenced on its own with `--skip-check nat-collision` or `--skip-check
+  multi-homed-endpoint` (or `RUNOS_PREFLIGHT_SKIP=<name>` in the installer's environment).
+
+  Three faults found by an adversarial review of that split are fixed in the same change.
+
+  The two checks probed the public IP INDEPENDENTLY, so one preflight run made two probes whose
+  answers were not required to agree. Driven with two different answers, BOTH warnings printed one
+  screen apart saying opposite things. Dual-WAN or failover egress, a rotating CGNAT pool, or a
+  first-provider failure sending the second call to another provider all produce that, and the
+  first provider asked is a dual-stack endpoint, so an IPv6-preferring host falls through to
+  provider two routinely. The host facts are now gathered ONCE per preflight run and both branches
+  read that one answer, so at most one of the two can speak. Removing the second probe also halves
+  the cost: measured 2026-08-24, both checks end to end, 2.30 to 6.88 s before against 0.84 to
+  2.46 s after, and with the uplink blackholed 30.02 s before against 15.01 s after (three
+  providers at a 5 s budget each).
+
+  The advisory's runbook was a silent no-op when followed literally. It printed only THIS node's
+  join, and RunOS hands out the private address only when BOTH peers hold a membership in one
+  network, so an operator who ran exactly the two printed commands got no change and both commands
+  reported success. It now says that every node on that private network must join the SAME network,
+  and it names where `<networkId>` and each node's `<nid>` come from.
+
+  The advisory printed the wrong address on a host with virtual bridges. It read the first RFC1918
+  address in interface-enumeration order, which on a host holding a Docker bridge address on
+  `eth0`, a routable address on another NIC, a libvirt `virbr0` and the real private-network
+  address on a fourth NIC is the Docker bridge. Proved on real Linux 2026-08-24. The advisory now
+  reads only interfaces that could carry a real private network (container, hypervisor, CNI and
+  RunOS links are excluded by name), prints a literal `--address` only when exactly ONE such
+  interface holds a private address, and otherwise names the interfaces and lets the operator
+  supply the address. A node with a public NIC plus `docker0` or `virbr0` and no real private
+  network now gets no advisory at all. The `nat-collision` branch reads the same address it always
+  did and is unchanged.
+
 - **The NAT-collision preflight warning printed a remedy that did nothing when followed exactly**
   (FCR 148, F8). The warning fires when a node sits behind NAT, and it told the operator to declare
   a network and join THIS node to it. Endpoint resolution reads a self-join over

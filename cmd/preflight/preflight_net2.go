@@ -274,27 +274,72 @@ func checkOutboundUdpForWireguard() error {
 		cause)
 }
 
-// nwPrimaryPrivateIPv4Fn, nwExternalIPFn and nwIfaceHoldingIPv4Fn are the seams the two endpoint
-// checks call through, so a test can stand in fakes and prove the printed text without a NAT and
-// without a second NIC. The value of these checks is the text, so the text has to be reachable
-// from a test.
+// These are the seams the two endpoint checks call through, so a test can stand in fakes and prove
+// the printed text without a NAT, without a second NIC and without a private network. The value of
+// these checks is the text, so the text has to be reachable from a test.
 var (
-	nwPrimaryPrivateIPv4Fn = nwPrimaryPrivateIPv4
-	nwExternalIPFn         = commons.GetExternalIPAddress
-	nwIfaceHoldingIPv4Fn   = nwIfaceHoldingIPv4
+	nwPrimaryPrivateIPv4Fn    = nwPrimaryPrivateIPv4
+	nwExternalIPFn            = commons.GetExternalIPAddress
+	nwIfaceHoldingIPv4Fn      = nwIfaceHoldingIPv4
+	nwPrivateIPv4CandidatesFn = nwPrivateIPv4Candidates
 )
 
 // nwEndpoint is what both endpoint checks read: the node's primary RFC1918 address, the address the
-// outside world sees, and the local interface that holds that outside address (empty when no
-// interface on this host holds it). The third field is the one that separates a NAT'd host from a
-// multi-homed one, and it was missing until 2026-08-24. See nwEndpointFacts.
+// outside world sees, the local interface that holds that outside address (empty when no interface
+// on this host holds it), and the private addresses that could plausibly carry a RunOS private
+// network. The third field is the one that separates a NAT'd host from a multi-homed one, and it
+// was missing until 2026-08-24. See nwEndpointFacts.
 type nwEndpoint struct {
 	private string
 	public  string
 	dev     string
+	// privCandidates is read ONLY by checkMultiHomedEndpoint. private stays the NAT branch's
+	// input, unchanged. See nwPrivateIPv4Candidates for why the two questions differ.
+	privCandidates []nwIfaceAddr
 }
 
-// nwEndpointFacts gathers the host facts checkNATEndpointCollision and checkMultiHomedEndpoint
+// ONE ANSWER PER PREFLIGHT RUN. Both endpoint checks read these three variables, so the two cannot
+// be handed different answers and cannot contradict each other.
+//
+// Until 2026-08-24 each check called the gatherer itself. The public-IP probe therefore ran TWICE
+// and the two answers were never required to agree. Driven with two different answers, BOTH
+// warnings printed one screen apart saying opposite things: nat-collision called the node NAT'd,
+// multi-homed-endpoint said it was NOT behind NAT. The shape is not rare. Dual-WAN or failover
+// egress, a rotating CGNAT pool, or a transient failure of the first provider sending the second
+// call to a different provider all produce it, and commons.GetExternalIPAddress asks the
+// DUAL-STACK ipify endpoint first, so an IPv6-preferring host falls through to provider two
+// routinely.
+//
+// It also halves the probe cost, which is the whole cost of these two checks. Measured 2026-08-24
+// on a developer machine, both checks end to end, six runs before and five after: two probes 2.30
+// to 6.88 s against one probe 0.84 to 2.46 s. With curl and dig replaced by shims that never
+// answer, two probes 30.02 s against one probe 15.01 s, because commons.GetExternalIPAddress tries
+// three providers on a 5 s budget each.
+//
+// Preflight runs its checks sequentially in one goroutine, so a plain flag is enough here.
+var (
+	nwEndpointGathered bool
+	nwEndpointCache    nwEndpoint
+	nwEndpointCacheOK  bool
+)
+
+// nwEndpointFacts returns the facts for this preflight run, gathering them on first use.
+func nwEndpointFacts() (nwEndpoint, bool) {
+	if !nwEndpointGathered {
+		nwEndpointCache, nwEndpointCacheOK = nwGatherEndpointFacts()
+		nwEndpointGathered = true
+	}
+	return nwEndpointCache, nwEndpointCacheOK
+}
+
+// nwResetEndpointFacts drops the memo. runChecksSkipping calls it at the start of every preflight
+// run, so "once per run" means what it says and a second run inside one process cannot read the
+// first run's answer. Tests call it whenever they change the fakes.
+func nwResetEndpointFacts() {
+	nwEndpointGathered, nwEndpointCache, nwEndpointCacheOK = false, nwEndpoint{}, false
+}
+
+// nwGatherEndpointFacts reads the host facts checkNATEndpointCollision and checkMultiHomedEndpoint
 // share, and reports false when the answer is inconclusive so that NEITHER check speaks. Three
 // cases are inconclusive, and all three must stay silent, because a warning that fires on a healthy
 // machine trains operators to ignore every warning:
@@ -305,12 +350,8 @@ type nwEndpoint struct {
 //   - The externally observed address IS the primary private address. Not NAT, and no separate
 //     public address to advise about either.
 //
-// COST NOTE. Both checks call this, so a preflight run probes the public IP twice
-// (commons.GetExternalIPAddress shells out to curl/dig with a 5s per-provider budget). That is the
-// price of reporting the two cases under two check names, which is what lets an operator skip one
-// with --skip-check without silencing the other. The probe is bounded and only one of the two
-// checks ever prints anything.
-func nwEndpointFacts() (nwEndpoint, bool) {
+// Call it through nwEndpointFacts, never directly: it is the expensive half.
+func nwGatherEndpointFacts() (nwEndpoint, bool) {
 	private := nwPrimaryPrivateIPv4Fn()
 	if private == "" {
 		return nwEndpoint{}, false
@@ -327,7 +368,12 @@ func nwEndpointFacts() (nwEndpoint, bool) {
 		return nwEndpoint{}, false
 	}
 
-	return nwEndpoint{private: private, public: public, dev: nwIfaceHoldingIPv4Fn(public)}, true
+	return nwEndpoint{
+		private:        private,
+		public:         public,
+		dev:            nwIfaceHoldingIPv4Fn(public),
+		privCandidates: nwPrivateIPv4CandidatesFn(),
+	}, true
 }
 
 // checkNATEndpointCollision detects that this node sits behind NAT (its primary
@@ -445,6 +491,14 @@ func checkNATEndpointCollision() error {
 // cluster-scoped and is runnable at once. The message says so, for the same reason
 // checkNATEndpointCollision does (FCR 148, F8).
 //
+// ONE MEMBERSHIP IS NOT A REMEDY, and the advisory has to say so even though it is short. Endpoint
+// resolution reads a self-join over network_memberships, so RunOS hands out the private address
+// only when BOTH peers hold a membership in ONE network. An earlier draft printed only THIS node's
+// join, which is a silent no-op when followed literally: nothing changes and every command reports
+// success. The NAT branch has said this since FCR 148 F8; this branch now says it too, in one
+// sentence. The same sentence pair names where <networkId> and <nid> come from, because a
+// placeholder with no stated source sends the operator looking.
+//
 // THE PRINTED CLI COMMANDS DO NOT RUN ON THIS NODE. cmd/root.go registers only the node-agent
 // subcommands, so `runos clusters ...` on this box answers `unknown command "clusters" for "runos"`.
 // The message names where the commands run, because an operator standing on the node reads "the
@@ -459,13 +513,44 @@ func checkMultiHomedEndpoint() error {
 		// checkNATEndpointCollision owns that case.
 		return nil
 	}
+	if len(ep.privCandidates) == 0 {
+		// Every RFC1918 address this host holds sits on a container, VM or CNI bridge, so there
+		// is no private network to declare and nothing to advise. Measured on real Linux
+		// 2026-08-24: a public NIC plus docker0 and virbr0 used to get this advisory, telling the
+		// operator to declare a network for a bridge address.
+		return nil
+	}
 
-	return fmt.Errorf("this node holds its own public address %s on %s, and it also has a private address %s. It is NOT behind NAT.\n\n"+
+	// ONE candidate is a fact and gets printed as `--address <literal>`. TWO OR MORE is a guess,
+	// and a guess printed as a literal is exactly how the 2026-08-24 defect reached the operator:
+	// the advisory named a docker bridge address as this node's private-network address. Where the
+	// check is not confident, it names the interfaces and lets the operator supply the address.
+	held, addrArg, pickNote := "", "<address>", ""
+	if len(ep.privCandidates) == 1 {
+		only := ep.privCandidates[0]
+		held = fmt.Sprintf("a private address %s on %s", only.addr, only.dev)
+		addrArg = only.addr
+	} else {
+		held = fmt.Sprintf("private addresses on %s", nwDevList(ep.privCandidates))
+		pickNote = " This node holds a private address on more than one interface, so <address> is its address on the network you declare: read it with 'ip -4 addr show <interface>'."
+	}
+
+	return fmt.Errorf("this node holds its own public address %s on %s, and it also has %s. It is NOT behind NAT.\n\n"+
 		"RunOS hands peers this node's public address unless a declared network says otherwise, so peers reach this node over the public path. If OTHER nodes of this cluster sit on that same private network, declaring the network makes those peers dial each other at their private addresses instead. This is an optimisation, not a repair: the cluster works either way and nothing here needs reinstalling.\n\n"+
-		"Run these from a workstation that has the RunOS CLI installed, or from the console. The 'runos' on THIS node is the node agent and has no 'clusters' command. The join needs this node's nid, so run it AFTER this node has registered:\n"+
+		"EVERY node on that private network must join the SAME network, each at its own private address. RunOS hands out the private address only when BOTH peers hold a membership in one network, so joining this node and stopping changes nothing, and every command still reports success.\n\n"+
+		"Run these from a workstation that has the RunOS CLI installed, or from the console. The 'runos' on THIS node is the node agent and has no 'clusters' command. The create command prints <networkId>. Each node prints its own <nid> with 'sudo runos status' after it registers, and this node has not registered yet, so run its join after it does.%s\n"+
 		"  runos clusters networks create --cid <cid> --name <network-name> --json\n"+
 		"  runos clusters networks join --cid <cid> --network-id <networkId> --nid <nid> --address %s",
-		ep.public, ep.dev, ep.private, ep.private)
+		ep.public, ep.dev, held, pickNote, addrArg)
+}
+
+// nwDevList renders the interface names of candidates for the advisory, in enumeration order.
+func nwDevList(candidates []nwIfaceAddr) string {
+	devs := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		devs = append(devs, c.dev)
+	}
+	return strings.Join(devs, ", ")
 }
 
 // checkHostFirewallEgressPosture inspects (locally, no network) the host's
@@ -970,8 +1055,24 @@ func nwNftOutputPolicyDrop(ruleset string) bool {
 	return false
 }
 
-// nwPrimaryPrivateIPv4 returns the RFC1918 IPv4 of the primary (non-loopback)
-// interface used for the default route, or "" if none / the primary is public.
+// nwPrimaryPrivateIPv4 returns the FIRST RFC1918 IPv4 this host holds on an up,
+// non-loopback interface, in net.Interfaces() order, or "" when it holds none.
+//
+// IT IS NOT THE DEFAULT-ROUTE INTERFACE'S ADDRESS. This comment claimed that
+// until 2026-08-24 and was wrong: the function reads no route table at all.
+// Measured on real Linux that day, on a host holding a docker bridge address on
+// eth0, a routable address on pub0, a libvirt virbr0 and the real
+// private-network address on privnic, it answers the docker bridge address.
+//
+// The default-route interface would also be the WRONG answer for these callers:
+// on a multi-homed cloud server the default route leaves by the PUBLIC
+// interface, which holds no RFC1918 address, so that reading would return ""
+// and silence both endpoint checks.
+//
+// checkNATEndpointCollision reads this, and its behaviour is deliberately
+// unchanged: the NAT branch's text was hardened over several rounds and a node
+// behind NAT holds one private address in practice. checkMultiHomedEndpoint
+// reads nwPrivateIPv4Candidates instead, which asks the narrower question.
 func nwPrimaryPrivateIPv4() string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -1008,24 +1109,25 @@ func nwPrimaryPrivateIPv4() string {
 	return ""
 }
 
-// nwIfaceHoldingIPv4 returns the name of the local, up, non-loopback interface that
-// holds addr, or "" when no interface on this host holds it. It is the question
-// that separates a NAT'd node from a multi-homed one: a NAT'd node never holds its
-// public address, a dual-homed cloud server does (Hetzner Cloud puts the routable
-// address on eth0 and the private-network address on enp7s0). Interface selection
-// matches nwPrimaryPrivateIPv4 above, so both read the same set of interfaces.
-// Anything it cannot determine returns "", which routes the caller to the NAT
-// branch, the conservative choice: that branch was already the behaviour before
-// this probe existed.
-func nwIfaceHoldingIPv4(addr string) string {
-	want := net.ParseIP(strings.TrimSpace(addr))
-	if want == nil || want.To4() == nil {
-		return ""
-	}
+// nwIfaceAddr is one up, non-loopback interface and one IPv4 address it holds.
+type nwIfaceAddr struct {
+	dev  string
+	addr string
+}
+
+// nwIfaceIPv4s returns every IPv4 address this host holds on an up, non-loopback
+// interface, in net.Interfaces() order. It is the single enumeration the endpoint
+// probes below share.
+//
+// nwPrimaryPrivateIPv4 above deliberately does NOT read it. That function feeds the
+// NAT branch's text, which was hardened over several rounds, so it stays exactly as
+// it was.
+func nwIfaceIPv4s() []nwIfaceAddr {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return ""
+		return nil
 	}
+	var held []nwIfaceAddr
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
@@ -1045,12 +1147,87 @@ func nwIfaceHoldingIPv4(addr string) string {
 			if ip == nil {
 				continue
 			}
-			if ip4 := ip.To4(); ip4 != nil && ip4.Equal(want) {
-				return iface.Name
+			if ip4 := ip.To4(); ip4 != nil {
+				held = append(held, nwIfaceAddr{dev: iface.Name, addr: ip4.String()})
 			}
 		}
 	}
+	return held
+}
+
+// nwIfaceHoldingIPv4 returns the name of the local, up, non-loopback interface that
+// holds addr, or "" when no interface on this host holds it. It is the question
+// that separates a NAT'd node from a multi-homed one: a NAT'd node never holds its
+// public address, a dual-homed cloud server does (Hetzner Cloud puts the routable
+// address on eth0 and the private-network address on enp7s0).
+// Anything it cannot determine returns "", which routes the caller to the NAT
+// branch, the conservative choice: that branch was already the behaviour before
+// this probe existed.
+func nwIfaceHoldingIPv4(addr string) string {
+	want := net.ParseIP(strings.TrimSpace(addr))
+	if want == nil || want.To4() == nil {
+		return ""
+	}
+	for _, held := range nwIfaceIPv4s() {
+		if ip := net.ParseIP(held.addr); ip != nil && ip.Equal(want) {
+			return held.dev
+		}
+	}
 	return ""
+}
+
+// nwPrivateIPv4Candidates returns every RFC1918 IPv4 this host holds on an interface
+// that could plausibly carry a RunOS private network: up, non-loopback, and not a
+// container, VM, CNI or RunOS link. checkMultiHomedEndpoint reads this instead of
+// nwPrimaryPrivateIPv4, and 2026-08-24 measured why on real Linux.
+//
+// A host with a docker bridge address on eth0, a routable address on pub0, a libvirt
+// virbr0 and the real private-network address on privnic made nwPrimaryPrivateIPv4
+// answer the docker bridge address, and the advisory then told the operator to
+// declare a network at that bridge. "First RFC1918 in enumeration order" is simply
+// not the question the advisory is asking.
+//
+// An empty answer is meaningful and the caller acts on it: a host whose only RFC1918
+// addresses sit on bridges has no private network to declare, so the advisory stays
+// silent instead of pointing at docker0.
+func nwPrivateIPv4Candidates() []nwIfaceAddr {
+	var candidates []nwIfaceAddr
+	for _, held := range nwIfaceIPv4s() {
+		if nwIsBridgeOrVirtualInterface(held.dev) {
+			continue
+		}
+		if ip := net.ParseIP(held.addr); ip != nil && ip.IsPrivate() {
+			candidates = append(candidates, held)
+		}
+	}
+	return candidates
+}
+
+// nwIsBridgeOrVirtualInterface reports whether dev is a link a container runtime, a
+// hypervisor, a CNI or RunOS itself creates, rather than a NIC on a network an
+// operator can declare. The test is the interface NAME, which is what the field
+// gives us: the tools that create these links fix their names (docker0 and br-<hex>
+// from Docker, virbr* from libvirt, vboxnet* and vmnet* from the desktop
+// hypervisors), and RunOS's own links are already enumerated by
+// idIsRunosManagedInterface.
+//
+// "br-" is listed and plain "br" is NOT. A bridge named br0 is commonly the
+// operator's own bridged NIC on a KVM host, which is exactly the private path this
+// advisory is about.
+//
+// Over-excluding here costs silence on an advisory. Under-excluding costs a printed
+// address that is wrong, which is the defect this fixes, so the list leans towards
+// silence.
+func nwIsBridgeOrVirtualInterface(dev string) bool {
+	if idIsRunosManagedInterface(dev) { // wg*, cilium_*, lxc*, cni0, kube-ipvs0
+		return true
+	}
+	for _, prefix := range []string{"docker", "br-", "virbr", "veth", "vboxnet", "vmnet", "flannel", "cali", "kube-", "dummy"} {
+		if strings.HasPrefix(dev, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // nwMultipleDefaultRoutes reports whether the host has more than one IPv4 default
