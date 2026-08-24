@@ -238,6 +238,12 @@ func preflightChecks() []check {
 		// ---- network, advisory ----
 		{name: "dns-answer-sanity", fn: checkDnsAnswerSanity, sev: sevWarn, net: true},
 		{name: "wireguard-udp-egress", fn: checkOutboundUdpForWireguard, sev: sevWarn, net: true},
+		// Two entries, one per branch of the same host question. The reporter prints
+		// the REGISTRY name (report() reads c.name), so a single check cannot rename
+		// itself per branch without changing the framework, and "nat-collision" is a
+		// false label on a multi-homed host. Two entries also give the operator two
+		// independent --skip-check names. Exactly one of the two ever speaks.
 		{name: "nat-collision", fn: checkNATEndpointCollision, sev: sevWarn, net: true},
+		{name: "multi-homed-endpoint", fn: checkMultiHomedEndpoint, sev: sevWarn, net: true},
 	}
 }

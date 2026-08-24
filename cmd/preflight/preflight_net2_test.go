@@ -81,13 +81,37 @@ func fakeNATEnv(t *testing.T, privateIP, publicIP string) {
 }
 
 // fakeNATEnvErr is fakeNATEnv with control over the public-IP probe's error, so both halves of
-// the inconclusive guard (empty answer, failed probe) can be tested separately.
+// the inconclusive guard (empty answer, failed probe) can be tested separately. It pins the
+// third seam to "no local interface holds the public address", which is the NAT shape; use
+// fakeMultiHomedEnv for the dual-homed shape.
 func fakeNATEnvErr(t *testing.T, privateIP, publicIP string, publicErr error) {
 	t.Helper()
-	origPrivate, origPublic := nwPrimaryPrivateIPv4Fn, nwExternalIPFn
+	fakeEndpointEnv(t, privateIP, publicIP, publicErr, "")
+}
+
+// fakeMultiHomedEnv is the dual-homed shape measured on RunOS dev 2026-08-24: the host holds its
+// own public address on dev, and has a private address as well.
+func fakeMultiHomedEnv(t *testing.T, privateIP, publicIP, dev string) {
+	t.Helper()
+	fakeEndpointEnv(t, privateIP, publicIP, nil, dev)
+}
+
+// fakeEndpointEnv stands in for the three host facts the endpoint checks read. dev is the local
+// interface that holds publicIP, or "" when no interface does.
+func fakeEndpointEnv(t *testing.T, privateIP, publicIP string, publicErr error, dev string) {
+	t.Helper()
+	origPrivate, origPublic, origIface := nwPrimaryPrivateIPv4Fn, nwExternalIPFn, nwIfaceHoldingIPv4Fn
 	nwPrimaryPrivateIPv4Fn = func() string { return privateIP }
 	nwExternalIPFn = func() (string, error) { return publicIP, publicErr }
-	t.Cleanup(func() { nwPrimaryPrivateIPv4Fn, nwExternalIPFn = origPrivate, origPublic })
+	nwIfaceHoldingIPv4Fn = func(addr string) string {
+		if dev != "" && addr == publicIP {
+			return dev
+		}
+		return ""
+	}
+	t.Cleanup(func() {
+		nwPrimaryPrivateIPv4Fn, nwExternalIPFn, nwIfaceHoldingIPv4Fn = origPrivate, origPublic, origIface
+	})
 }
 
 // FCR 148 F8. The remedy was correct but its timing was not: preflight runs BEFORE `runos
@@ -296,5 +320,226 @@ func TestNatCollisionStaysSilentWhenThePublicIPIsEmpty(t *testing.T) {
 
 	if err := checkNATEndpointCollision(); err != nil {
 		t.Fatalf("a blank public IP is inconclusive; want no warning, got:\n%s", err)
+	}
+}
+
+// nwAnyLocalIPv4 returns an IPv4 address this machine really holds, with the interface that holds
+// it. CONTRIBUTING.md forbids real addresses in the repo, so the test reads one at runtime instead
+// of hardcoding it. Returns ("", "") when the machine has no non-loopback IPv4, which is the one
+// case the caller must skip rather than fail.
+func nwAnyLocalIPv4(t *testing.T) (dev string, addr string) {
+	t.Helper()
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip4 := ipnet.IP.To4(); ip4 != nil {
+				return iface.Name, ip4.String()
+			}
+		}
+	}
+	return "", ""
+}
+
+// Measured on RunOS dev 2026-08-24. Three Hetzner Cloud servers joined one cluster. Each holds its
+// OWN routable address on eth0 and a private address on enp7s0 for a Hetzner private network. Every
+// one of them was greeted with "this node is behind NAT (private ... vs public ...)". BOTH claims
+// in that warning are false for such a host: it is not behind NAT, it holds the public address
+// itself, and three DISTINCT public addresses cannot collide as WireGuard endpoints. The operator
+// reads a security-flavoured alarm about a cluster that is working.
+//
+// The cause is that the check compares the primary PRIVATE address to the externally observed one
+// and calls any difference NAT. It never asks whether this host holds the external address on one
+// of its own interfaces.
+//
+// This test feeds an address the machine REALLY holds, read through net.Interfaces() at runtime, as
+// the externally observed address. That is the dual-homed shape, and it drives the real
+// interface-enumeration path rather than a stub of it.
+func TestNatCollisionStaysSilentWhenThisHostHoldsTheExternalAddressItself(t *testing.T) {
+	dev, addr := nwAnyLocalIPv4(t)
+	if addr == "" {
+		t.Skip("this machine has no non-loopback IPv4; there is no dual-homed shape to test")
+	}
+	if addr == fixturePrivateIP {
+		t.Skipf("this machine holds the private fixture address %s; the two roles would collide", fixturePrivateIP)
+	}
+	// Only the two host-fact seams are faked. nwIfaceHoldingIPv4Fn stays REAL, which is the whole
+	// point of this test: it proves the shipped interface-enumeration path answers correctly.
+	origPrivate, origPublic := nwPrimaryPrivateIPv4Fn, nwExternalIPFn
+	nwPrimaryPrivateIPv4Fn = func() string { return fixturePrivateIP }
+	nwExternalIPFn = func() (string, error) { return addr, nil }
+	t.Cleanup(func() { nwPrimaryPrivateIPv4Fn, nwExternalIPFn = origPrivate, origPublic })
+
+	if err := checkNATEndpointCollision(); err != nil {
+		t.Fatalf("this host holds %s on %s, so it is multi-homed and NOT behind NAT; want no collision warning, got:\n%s",
+			addr, dev, err)
+	}
+
+	// The same real path must ALSO put the node in the multi-homed branch, naming the interface it
+	// really found. A silent nat-collision check with a silent advisory beside it would leave the
+	// operator with nothing at all.
+	err := checkMultiHomedEndpoint()
+	if err == nil {
+		t.Fatal("a host that holds its own public address and has a private one must get the advisory")
+	}
+	if !strings.Contains(err.Error(), dev) {
+		t.Errorf("want the advisory to name the interface %q that really holds %s, got:\n%s", dev, addr, err)
+	}
+}
+
+// The Hetzner Cloud shape from the field, driven hermetically through the seams so the exact text
+// an operator reads is pinned. Measured on RunOS dev 2026-08-24: a routable address on eth0, a
+// private-network address on enp7s0, and a "behind NAT" warning that was false twice over.
+func TestMultiHomedHostGetsNoCollisionClaimAndAShortAdvisory(t *testing.T) {
+	fakeMultiHomedEnv(t, fixturePrivateIP, fixturePublicIP, "eth0")
+
+	if err := checkNATEndpointCollision(); err != nil {
+		t.Fatalf("the host holds %s itself, so it is not behind NAT; want no collision warning, got:\n%s",
+			fixturePublicIP, err)
+	}
+
+	err := checkMultiHomedEndpoint()
+	if err == nil {
+		t.Fatal("a multi-homed host with a private address must still get the short advisory")
+	}
+	msg := err.Error()
+
+	// The three facts. The public address, the interface that holds it, and the private address.
+	for _, want := range []string{fixturePublicIP, "eth0", fixturePrivateIP, "NOT behind NAT"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("want the advisory to state %q, got:\n%s", want, msg)
+		}
+	}
+	// The gain, stated as a gain. This case is an optimisation, not a repair.
+	if !strings.Contains(msg, "optimisation, not a repair") {
+		t.Errorf("want the advisory to frame the private network as an optimisation, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "dial each other at their private addresses") {
+		t.Errorf("want the advisory to say what declaring the network buys, got:\n%s", msg)
+	}
+	// The two commands, with this node's private address filled in so the join is copy-pasteable.
+	if !strings.Contains(msg, "runos clusters networks create --cid <cid> --name <network-name> --json") {
+		t.Errorf("want the create command, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "--address "+fixturePrivateIP) {
+		t.Errorf("want the node's private address filled into the join command, got:\n%s", msg)
+	}
+	// Every false or alarming claim from the NAT text must stay OUT of this branch.
+	for _, banned := range []string{"behind NAT (private", "collide", "only one stays up", "hairpin", "sudo runos install", "THE INSTALLER DOES NOT WAIT"} {
+		if strings.Contains(msg, banned) {
+			t.Errorf("the multi-homed advisory must not claim %q, got:\n%s", banned, msg)
+		}
+	}
+	// Short. The NAT text is a 5-step repair runbook; this one is an advisory and must read as one.
+	if lines := strings.Count(msg, "\n") + 1; lines > 10 {
+		t.Errorf("the advisory must stay short, got %d lines:\n%s", lines, msg)
+	}
+}
+
+// The NAT branch is unchanged, word for word. It was hardened over several rounds (FCR 148 F8,
+// hardware 2026-08-18, 2026-08-19 and 2026-08-23) and the 2026-08-24 split must not have touched
+// it. A genuinely NAT'd host holds no interface with the public address.
+func TestGenuinelyNattedHostStillGetsTheFullCollisionWarning(t *testing.T) {
+	fakeNATEnv(t, fixturePrivateIP, fixturePublicIP)
+
+	if err := checkMultiHomedEndpoint(); err != nil {
+		t.Fatalf("no interface holds the public address, so this is NAT, not multi-homing; want no advisory, got:\n%s", err)
+	}
+
+	err := checkNATEndpointCollision()
+	if err == nil {
+		t.Fatal("a NAT'd host must still get the endpoint-collision warning")
+	}
+	msg := err.Error()
+
+	if !strings.Contains(msg, fmt.Sprintf("this node is behind NAT (private %s vs public %s)", fixturePrivateIP, fixturePublicIP)) {
+		t.Errorf("want the NAT header unchanged, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "their tunnels collide and only one stays up, and same-NAT peers also need NAT hairpin support. A single node behind NAT is fine.") {
+		t.Errorf("want the collision paragraph unchanged, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "This is a networking heads-up, not a RunOS limitation.") {
+		t.Errorf("want the closing line unchanged, got:\n%s", msg)
+	}
+}
+
+// Both checks read the same facts, so both must stay silent on every inconclusive answer. Pinning
+// them together stops the split from starting to warn where preflight used to say nothing.
+func TestBothEndpointChecksStaySilentOnInconclusiveFacts(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T)
+	}{
+		{"no RFC1918 primary address", func(t *testing.T) { fakeNATEnv(t, "", fixturePublicIP) }},
+		{"public IP bound to the primary interface", func(t *testing.T) { fakeNATEnv(t, fixturePublicIP, fixturePublicIP) }},
+		{"public IP probe failed", func(t *testing.T) {
+			fakeNATEnvErr(t, fixturePrivateIP, "", fmt.Errorf("no egress to the IP echo services"))
+		}},
+		{"public IP probe answered blank", func(t *testing.T) { fakeNATEnv(t, fixturePrivateIP, "   ") }},
+		// The same inconclusive answers with an interface that WOULD match: the guard must win
+		// before the interface question is ever asked.
+		{"no RFC1918 primary address, interface present", func(t *testing.T) {
+			fakeMultiHomedEnv(t, "", fixturePublicIP, "eth0")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup(t)
+			if err := checkNATEndpointCollision(); err != nil {
+				t.Errorf("inconclusive facts must not warn; nat-collision said:\n%s", err)
+			}
+			if err := checkMultiHomedEndpoint(); err != nil {
+				t.Errorf("inconclusive facts must not warn; multi-homed-endpoint said:\n%s", err)
+			}
+		})
+	}
+}
+
+// Both branches are registered, both are advisory, and neither blocks an install. A wrong severity
+// here would fail an install over a working cluster.
+func TestEndpointChecksAreRegisteredAsAdvisory(t *testing.T) {
+	want := map[string]bool{"nat-collision": false, "multi-homed-endpoint": false}
+	for _, c := range preflightChecks() {
+		if _, ok := want[c.name]; !ok {
+			continue
+		}
+		want[c.name] = true
+		if c.sev != sevWarn {
+			t.Errorf("check %q must be advisory, got severity %v", c.name, c.sev)
+		}
+		if c.fatal {
+			t.Errorf("check %q must not be a fatal prerequisite", c.name)
+		}
+		if !c.net {
+			t.Errorf("check %q reads the externally observed address, so it belongs to the network phase", c.name)
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Errorf("no %q check is registered", name)
+		}
+	}
+}
+
+// nwIfaceHoldingIPv4 itself, on addresses no machine holds. RFC 5737 TEST-NET-3 is reserved for
+// documentation and is never assigned, so this answer is stable on any builder.
+func TestNwIfaceHoldingIPv4RejectsAddressesThisHostDoesNotHold(t *testing.T) {
+	for _, addr := range []string{fixturePublicIP, "", "not-an-ip", "::1", "0.0.0.0"} {
+		if dev := nwIfaceHoldingIPv4(addr); dev != "" {
+			t.Errorf("nwIfaceHoldingIPv4(%q) = %q, want \"\" (no interface holds it)", addr, dev)
+		}
 	}
 }

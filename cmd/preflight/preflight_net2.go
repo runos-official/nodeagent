@@ -274,22 +274,82 @@ func checkOutboundUdpForWireguard() error {
 		cause)
 }
 
-// nwPrimaryPrivateIPv4Fn and nwExternalIPFn are the seams the NAT-collision check calls through,
-// so a test can stand in a fake and prove the printed remedy without a NAT. The value of this
-// check is the remedy text, so the text has to be reachable from a test.
+// nwPrimaryPrivateIPv4Fn, nwExternalIPFn and nwIfaceHoldingIPv4Fn are the seams the two endpoint
+// checks call through, so a test can stand in fakes and prove the printed text without a NAT and
+// without a second NIC. The value of these checks is the text, so the text has to be reachable
+// from a test.
 var (
 	nwPrimaryPrivateIPv4Fn = nwPrimaryPrivateIPv4
 	nwExternalIPFn         = commons.GetExternalIPAddress
+	nwIfaceHoldingIPv4Fn   = nwIfaceHoldingIPv4
 )
 
+// nwEndpoint is what both endpoint checks read: the node's primary RFC1918 address, the address the
+// outside world sees, and the local interface that holds that outside address (empty when no
+// interface on this host holds it). The third field is the one that separates a NAT'd host from a
+// multi-homed one, and it was missing until 2026-08-24. See nwEndpointFacts.
+type nwEndpoint struct {
+	private string
+	public  string
+	dev     string
+}
+
+// nwEndpointFacts gathers the host facts checkNATEndpointCollision and checkMultiHomedEndpoint
+// share, and reports false when the answer is inconclusive so that NEITHER check speaks. Three
+// cases are inconclusive, and all three must stay silent, because a warning that fires on a healthy
+// machine trains operators to ignore every warning:
+//
+//   - No RFC1918 primary address. The node is directly addressed and there is nothing to say.
+//   - No externally observed address. Either there is no egress to the IP echo services or the node
+//     is offline; both are already covered by the blocking egress checks.
+//   - The externally observed address IS the primary private address. Not NAT, and no separate
+//     public address to advise about either.
+//
+// COST NOTE. Both checks call this, so a preflight run probes the public IP twice
+// (commons.GetExternalIPAddress shells out to curl/dig with a 5s per-provider budget). That is the
+// price of reporting the two cases under two check names, which is what lets an operator skip one
+// with --skip-check without silencing the other. The probe is bounded and only one of the two
+// checks ever prints anything.
+func nwEndpointFacts() (nwEndpoint, bool) {
+	private := nwPrimaryPrivateIPv4Fn()
+	if private == "" {
+		return nwEndpoint{}, false
+	}
+
+	public, err := nwExternalIPFn()
+	if err != nil || strings.TrimSpace(public) == "" {
+		roslog.W("could not determine external IP; skipping the endpoint checks", err)
+		return nwEndpoint{}, false
+	}
+	public = strings.TrimSpace(public)
+
+	if public == private {
+		return nwEndpoint{}, false
+	}
+
+	return nwEndpoint{private: private, public: public, dev: nwIfaceHoldingIPv4Fn(public)}, true
+}
+
 // checkNATEndpointCollision detects that this node sits behind NAT (its primary
-// RFC1918 interface address differs from its detected public IP) and warns about
-// the WireGuard endpoint-collision foot-gun: WireGuard keys peers by their public
-// endpoint, so two RunOS nodes behind the SAME public IP collide and only one
-// tunnel stays up, and same-NAT peers additionally need NAT hairpin support. It
-// is a WARN: a single node behind NAT is perfectly fine and peers cannot be
-// enumerated at preflight. Returns nil when the node is directly routable or the
-// public IP cannot be determined (inconclusive must not block).
+// RFC1918 interface address differs from its detected public IP, AND no interface
+// on this host holds that public IP) and warns about the WireGuard
+// endpoint-collision foot-gun: WireGuard keys peers by their public endpoint, so
+// two RunOS nodes behind the SAME public IP collide and only one tunnel stays up,
+// and same-NAT peers additionally need NAT hairpin support. It is a WARN: a single
+// node behind NAT is perfectly fine and peers cannot be enumerated at preflight.
+// Returns nil when the node is directly routable or the public IP cannot be
+// determined (inconclusive must not block).
+//
+// THE HOST MUST NOT HOLD THE PUBLIC ADDRESS ITSELF, and that is a SEPARATE question
+// from "is the primary address private". Measured on RunOS dev 2026-08-24: three
+// Hetzner Cloud servers, each with its own routable address on eth0 and a private
+// address on enp7s0 for a Hetzner private network, were all told they were behind
+// NAT and at risk of colliding tunnels. Both claims were false. The host held the
+// public address, and the three nodes had three DIFFERENT public addresses, so no
+// endpoint could collide. The old equal-IP guard could not catch this, because it
+// compared the public address to the PRIVATE one and never to the host's other
+// interfaces, which made it dead code on a dual-homed host. checkMultiHomedEndpoint
+// now owns that case and this check declines it.
 //
 // THE REMEDY IS ORDERED, and the message says so (FCR 148, F8). Preflight runs
 // BEFORE `runos register` in the installer, so this node has no nid yet and the
@@ -327,25 +387,16 @@ var (
 // runs, because an operator standing on the node reads "the runos CLI" as the
 // binary that just printed the warning.
 func checkNATEndpointCollision() error {
-	ifaceIP := nwPrimaryPrivateIPv4Fn()
-	if ifaceIP == "" {
-		// No RFC1918 primary -> node is likely directly addressed; nothing to warn.
+	ep, ok := nwEndpointFacts()
+	if !ok {
 		return nil
 	}
-
-	extIP, err := nwExternalIPFn()
-	if err != nil || strings.TrimSpace(extIP) == "" {
-		// Can't determine public IP (no egress to the IP echo services, or
-		// offline). Inconclusive -> do not warn.
-		roslog.W("could not determine external IP; skipping NAT-collision check", err)
+	if ep.dev != "" {
+		// This host holds the public address on one of its own interfaces, so it is
+		// multi-homed, not NAT'd. checkMultiHomedEndpoint owns that case.
 		return nil
 	}
-	extIP = strings.TrimSpace(extIP)
-
-	if extIP == ifaceIP {
-		// Public IP is bound directly to the interface -> not behind NAT.
-		return nil
-	}
+	ifaceIP, extIP := ep.private, ep.public
 
 	return fmt.Errorf("this node is behind NAT (private %s vs public %s)\n\n"+
 		"WireGuard identifies peers by their public UDP endpoint. If you place more than one RunOS node behind this same NAT/public IP, their tunnels collide and only one stays up, and same-NAT peers also need NAT hairpin support. A single node behind NAT is fine.\n\n"+
@@ -373,6 +424,48 @@ func checkNATEndpointCollision() error {
 		"Proven on a two-node nested cluster 2026-08-18 and again 2026-08-19 (goal 28), and again on two lab nodes 2026-08-23: WireGuard peered over the LAN address only after BOTH nodes had registered and joined ONE network at their LAN addresses. Otherwise give each node a distinct routable IP, or a distinct inbound UDP 51820 port-forward per node.\n"+
 		"This is a networking heads-up, not a RunOS limitation.",
 		ifaceIP, extIP, ifaceIP)
+}
+
+// checkMultiHomedEndpoint is the other half of the split made on 2026-08-24. The node holds its own
+// public address on a local interface AND has a private address as well, which is a MULTI-HOMED
+// host, not a NAT'd one. Until the split, every such node was told it was behind NAT and that its
+// tunnels would collide. Measured on RunOS dev 2026-08-24 on three Hetzner Cloud servers, each with
+// a routable address on eth0 and a private address on enp7s0: all three read a security-flavoured
+// alarm about a cluster that was working.
+//
+// THE TEXT IS DELIBERATELY SHORT, and it must stay short. There is nothing broken to repair here.
+// The private network is an OPTIMISATION the operator may want, so the message states the fact,
+// names the gain, gives the two commands and stops. It must never claim a collision, never say
+// "only one stays up", and never send the operator to redo an install: an operator who reads a long
+// alarm on a healthy cluster learns to ignore preflight.
+//
+// THE JOIN STILL WAITS FOR REGISTRATION. Preflight runs BEFORE `runos register` (templates
+// install.sh runs preflight, then register), so this node has no row in the control plane yet and
+// `clusters networks join` is refused with a 409 until it does. `clusters networks create` is
+// cluster-scoped and is runnable at once. The message says so, for the same reason
+// checkNATEndpointCollision does (FCR 148, F8).
+//
+// THE PRINTED CLI COMMANDS DO NOT RUN ON THIS NODE. cmd/root.go registers only the node-agent
+// subcommands, so `runos clusters ...` on this box answers `unknown command "clusters" for "runos"`.
+// The message names where the commands run, because an operator standing on the node reads "the
+// runos CLI" as the binary that just printed the advisory.
+func checkMultiHomedEndpoint() error {
+	ep, ok := nwEndpointFacts()
+	if !ok {
+		return nil
+	}
+	if ep.dev == "" {
+		// No interface holds the public address, so this node really is behind NAT.
+		// checkNATEndpointCollision owns that case.
+		return nil
+	}
+
+	return fmt.Errorf("this node holds its own public address %s on %s, and it also has a private address %s. It is NOT behind NAT.\n\n"+
+		"RunOS hands peers this node's public address unless a declared network says otherwise, so peers reach this node over the public path. If OTHER nodes of this cluster sit on that same private network, declaring the network makes those peers dial each other at their private addresses instead. This is an optimisation, not a repair: the cluster works either way and nothing here needs reinstalling.\n\n"+
+		"Run these from a workstation that has the RunOS CLI installed, or from the console. The 'runos' on THIS node is the node agent and has no 'clusters' command. The join needs this node's nid, so run it AFTER this node has registered:\n"+
+		"  runos clusters networks create --cid <cid> --name <network-name> --json\n"+
+		"  runos clusters networks join --cid <cid> --network-id <networkId> --nid <nid> --address %s",
+		ep.public, ep.dev, ep.private, ep.private)
 }
 
 // checkHostFirewallEgressPosture inspects (locally, no network) the host's
@@ -909,6 +1002,51 @@ func nwPrimaryPrivateIPv4() string {
 			}
 			if ip4.IsPrivate() {
 				return ip4.String()
+			}
+		}
+	}
+	return ""
+}
+
+// nwIfaceHoldingIPv4 returns the name of the local, up, non-loopback interface that
+// holds addr, or "" when no interface on this host holds it. It is the question
+// that separates a NAT'd node from a multi-homed one: a NAT'd node never holds its
+// public address, a dual-homed cloud server does (Hetzner Cloud puts the routable
+// address on eth0 and the private-network address on enp7s0). Interface selection
+// matches nwPrimaryPrivateIPv4 above, so both read the same set of interfaces.
+// Anything it cannot determine returns "", which routes the caller to the NAT
+// branch, the conservative choice: that branch was already the behaviour before
+// this probe existed.
+func nwIfaceHoldingIPv4(addr string) string {
+	want := net.ParseIP(strings.TrimSpace(addr))
+	if want == nil || want.To4() == nil {
+		return ""
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil {
+				continue
+			}
+			if ip4 := ip.To4(); ip4 != nil && ip4.Equal(want) {
+				return iface.Name
 			}
 		}
 	}
