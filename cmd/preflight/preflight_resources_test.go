@@ -13,7 +13,7 @@ import (
 //
 // RunOS warned and installed. The cluster ran on one control plane and on two control planes.
 // The cluster collapsed when a third control plane joined, and it stayed collapsed.
-// All three guests sat on ONE backing device: LINSTOR replicated-2 on ftb1's SAS spindles.
+// All three guests sat on ONE backing device: LINSTOR replicated-2 on one host's SAS spindles.
 // etcd_disk_backend_commit_duration averaged 12.7 ms there, and the kube-apiserver missed its
 // handler deadline on almost every request.
 //

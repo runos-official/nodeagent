@@ -690,7 +690,7 @@ func resNetworkFsWarning(m resMountInfo) error {
 // the slower disk of the quorum plus a round trip, never a sum. What each added
 // control plane really adds is one more fsync per write across the cluster, and
 // FCR 147 collapsed because all three members sat on ONE backing device
-// (LINSTOR replicated-2 on ftb1's SAS spindles, under nested guests), so that
+// (LINSTOR replicated-2 on one host's SAS spindles, under nested guests), so that
 // added work landed on the same spindles and every fsync got slower.
 const resFsyncConsequence = "" +
 	"Do not make this node a control plane while etcd's data directory stays on this storage.\n" +
