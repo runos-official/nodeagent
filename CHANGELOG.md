@@ -7,6 +7,186 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.0
+
+Finalizes the v1.8.0 line (rc.1 through rc.34). This is the first node agent release since v1.7.2
+and it is large: 69 commits. Most of it was measured on real hardware during the pre-production lab
+campaign, not on a local cluster.
+
+**Compatibility.** The heartbeat carries a new `rolesKnown` flag and an `unknown` status. Nodeward
+must already understand both, so deploy nodeward before you advertise this version to a fleet. An
+older nodeward reads the absence of `rolesKnown` as `true`, which is what earlier agents already
+did, so an agent that predates this release is unaffected either way.
+
+### Added
+
+- **Interactive sessions, the agent half.** The agent holds a live two-way session and streams it to
+  a far end, so a terminal works on a machine with no inbound path and no public DNS record. A
+  session is not an instruction: session frames dispatch on the receiver goroutine and never enter
+  the five-worker instruction pool, because one terminal would otherwise hold a worker for its whole
+  life. Sessions are bounded at 16 and a further open is refused with a reason that names the limit,
+  rather than queued into an apparent hang.
+- **Control traffic takes priority over session data on the outbound stream.** Two classes only:
+  control is everything the agent sends today, bulk is session data, and control never waits behind
+  bulk. Bulk yields for at most 250 ms and then sends, because a console that never prints is as
+  broken as one that starves the control plane.
+- **Session output is split at 16 KiB.** Priority stops control traffic queueing behind bulk, but it
+  cannot recall a send already in flight, so control latency was bounded by one output frame. Over a
+  modelled 8 MB/s link a 512 KiB frame cost 70.3 ms of control p50 with a SINGLE session open. After
+  the split, 2.0 ms. Ordinary terminal output is untouched; only a coalesced burst is divided.
+- **A peer may carry the virtual machines it hosts.** A peer entry may include `extraAllowedIps`,
+  the pool addresses of the machines that node hosts. Each one is folded into the peer's WireGuard
+  allowed-ips, gets a kernel route under protocol 201, and is allowed through ufw. Every extra
+  address is validated like the primary, because peer fields are untrusted input to a root exec.
+- **Kernel routes for peers outside this node's overlay range, so cluster peering carries traffic.**
+  wg0 comes up with the cluster's own /24 as its only route and `wg set` adds none, so a peer from a
+  peered cluster was accepted by allowed-ips and then unreachable. The routes converge to exactly
+  the peer set, and a withdrawn peer loses its route.
+- **A peer may have no endpoint at all.** A node behind NAT with no inbound path has no endpoint
+  anyone can dial, and such a peer used to be dropped from the peer set entirely, public key
+  included. An empty endpoint now configures identity only. The NAT'd node dials out, the far side
+  recognises the key, and WireGuard learns the endpoint from authenticated traffic.
+- **A `multi-homed-endpoint` preflight advisory.** A host that holds its own routable address on one
+  NIC and a private address on another is no longer told it is behind NAT. The advisory states the
+  fact, names what declaring a private network buys, prints the commands, and stops. It blocks
+  nothing, because this case is an optimisation and not a repair.
+
+### Changed
+
+- **The join-time range clash check moved to the control plane.** A machine checking itself can only
+  ever refuse. The node now reports the networks it already holds as part of registering, excluding
+  RunOS's own wg0, Cilium and CNI links. For a cluster's first node those networks DECIDE the
+  overlay range, so the first machine can no longer collide with its own cluster at all. An older
+  agent sends no networks and the control plane chooses blind, exactly as before.
+- **The reserved-subnets check now guards the pod and service ranges.** A node in `172.25.0.0/16` or
+  `10.96.0.0/12` used to pass preflight and then collide after install, when Cilium or kube-proxy
+  claimed the same addresses. A LAN that merely CONTAINS a reserved range, such as a provider /8, is
+  deliberately left alone, because longest-prefix match sends the traffic the right way.
+- **`runos sync vpn` converges the peer set exactly**, like the stream path does. It was additive,
+  so a node that fell back to manual sync kept retired peers and stale endpoints. It converges the
+  peer ufw rules too.
+- **The stale wg1 user VPN range check is gone from preflight.** User VPN addressing is
+  account-scoped and pooled in conductor now, so the check moved to the control plane.
+
+### Fixed
+
+- **A transient timeout to nodeward was reported to the operator as a network compromise.** Measured
+  twice on real hardware. Preflight treated every L1Sec handshake failure as evidence of
+  interception, so an ordinary TCP i/o timeout blocked the install and told the operator to exempt
+  seven hosts from TLS inspection. On a network with no proxy that advice cannot succeed, and the
+  same install retried immediately with nothing changed passed. A transport failure is now
+  classified separately from a certificate failure. Only an actual certificate or hostname mismatch
+  still blocks and keeps the interception wording. Observed on a single-NIC machine, so this is not
+  specific to multi-homed hosts.
+- **Uninstall left the containerd image store on disk, so a reset never reclaimed it.** Measured on
+  two lab machines: after a full cluster reset both nodes were bare by every other measure while
+  their runtime data directories still held 7.2 GB and 3.0 GB. A freshly installed node started life
+  with the previous cluster's image layers, so the cost compounded with every reset cycle. Uninstall
+  now wipes the runtime data directories.
+- **A peer on the same LAN was routed through the tunnel instead of over the wire.** Peer routes now
+  skip any prefix already connected on another interface.
+- **A peer declared to have no inbound path lost its live address on every peer sync.** WireGuard
+  reports one endpoint field and never says whether the kernel got it from us or learned it from an
+  inbound packet, so the convergence plan removed and re-added the peer to clear an address that was
+  the whole point. Measured over 17.7 minutes on a test cluster: a node held no endpoint for its two
+  peers in 23 of 62 samples, 37 percent of the time, each episode costing 30 to 70 seconds. The plan
+  now reads each peer's last handshake and remembers what it last applied, so a declaration
+  converges both ways and a roamed address is left alone.
+- **A failed Kubernetes read no longer demotes the node in RunOS's records.** The heartbeat built
+  `isCp`, `isWorker` and `status` from one kubectl read, and every one of them returned false when
+  that read failed. Measured on a test cluster: one of three control planes was hard powered off and
+  within two minutes RunOS marked both SURVIVORS not ready with `isCp=false`, refused VM deletes and
+  broke kubectl on every node, while Kubernetes itself stayed healthy with etcd quorum. A control
+  plane is now identified by its own static pod manifest first, reads its own API server before the
+  proxied path, and carries its last known role when every read fails.
+- **Two control planes may be started together on an empty cluster.** The first node used to be
+  elected by counting ready control planes, so two machines that registered before either finished
+  installing were both told they were first. Both ran `kubeadm init`, and RunOS reported one healthy
+  two-node cluster that was two clusters with two CAs. Nodeward now hands the role to exactly one
+  machine, and a node that cannot find a ready control plane waits for one rather than guessing.
+- **A freshly installed node no longer finishes degraded.** `wg-quick@wg0` was left failed on every
+  newly installed node until its first reboot. The unit's `ExecStart` is now guarded, and a node
+  already in the fleet is repaired in place.
+- **wg0 comes up at boot again.** The stock `wg-quick@.service` is ordered after `nss-lookup.target`,
+  dnsmasq provides that target, and RunOS orders dnsmasq after wg0, which is an ordering cycle.
+  systemd broke it by deleting wg0's start job, so a rebooted node ran about 105 seconds with no
+  overlay. The agent now restores an instance unit with that dependency removed. A drop-in cannot do
+  this, because systemd lets a drop-in add a dependency and never remove one.
+- **The uninstall leaves the box bare.** Nine separate gaps closed across the release: the VM group
+  pool bridges and their systemd-networkd units, the pool-egress NAT chain, the per-VM firewall
+  chains, the assigned-address DNAT chain and its held addresses, the segment firewall and its boot
+  unit, the firewall dispatch's shadow jump, and every `-N` shadow chain a failed mid-swap rebuild
+  leaves behind. Held addresses are released BEFORE the DNAT chain is removed, because the other
+  order leaves a window where the host answers ARP for a machine's public address while nothing
+  forwards it.
+- **The control-plane-driven uninstall really reboots the node.** The uninstall's own
+  `systemctl stop runos` killed the agent before the reply was sent, so no reboot happened. Measured
+  on a test cluster reset: every machine wiped, none rebooted. The handler now answers first and
+  runs the uninstall and reboot in a transient unit that outlives the agent.
+- **A script that finished right at its budget is no longer reported as a timeout.** `timedOut` came
+  from the context alone, and the context always expires when a script runs to the end of its
+  budget. Conductor reads `timedOut` and throws the verdict away, so a successful step read as a
+  hung node.
+- **`RUN_REMOTE_SCRIPT` reports stdout, stderr and the exit code separately.** Merging the streams
+  corrupted any JSON verdict from a script that wrote a diagnostic to stderr, and discarding the
+  exit code made a `set -e` abort read as success with an empty body. A run is now bounded by
+  `timeoutSeconds`, killed by process group, and each stream is capped at 2 MiB with a marker naming
+  how much was dropped.
+- **Preflight egress verdicts are measured in the right order and say when they might be wrong.**
+  DNS resolution is measured for every target before any probe, the nine targets are probed
+  concurrently, and the summary names the `curl` cross-check and `--skip-check egress-endpoints` for
+  the case where the same URL answers from the box and preflight is the thing that is wrong.
+- **Preflight stopped blocking installs on a network that was fine.** Setting `DialContext` on a Go
+  transport switches off the automatic HTTP/2 upgrade, so preflight spoke HTTP/1.1 while every other
+  tool on the box spoke HTTP/2, and an empty reply surfaced as `EOF`. A single dropped connection no
+  longer blocks an install on its own; a verdict that severe takes three attempts.
+- **Preflight no longer blocks an install on an aligned supernet of a reserved range.** A route to
+  `10.96.0.0/11` was reported as overlapping the service range `10.96.0.0/12`, although a /11 is
+  less specific and loses longest-prefix match.
+- **The slow-disk preflight warning states a consequence, not just a number.** The `etcd-fsync`
+  warning reported a measurement and let the install continue, which is correct, and nothing told
+  the operator what the number meant. A cluster measured on real hardware ran on one control plane
+  and on two, then collapsed when a third joined and stayed collapsed, with etcd quorum at 0 of 3.
+  The warning now names the added fsync work each control plane brings and the node-scoped action.
+  It promises no outcome in either direction, because it measures one node. Still a warning, not a
+  refusal, and the 10 ms threshold is unchanged.
+- **The NAT-collision warning prints a remedy that works.** It told the operator to join THIS node
+  to a declared network, and endpoint resolution hands out the private address only when BOTH peers
+  hold a membership, so one membership changed nothing while every API call reported success.
+  Confirmed on two lab nodes: WireGuard peered over the LAN address only after both nodes held a
+  membership. The warning also called its commands "the runos CLI" while the `runos` on a node is
+  the node agent, and it promised that you restart nothing while the installer runs the Kubernetes
+  install straight after preflight.
+- **Multus is recognised as RunOS's own CNI plugin, rather than by luck.** Recognition depended on
+  the word `cilium` appearing in the file, which for Multus was an accident of its generated format.
+  A change in that format would have made every node that had VM networking uninstallable by its own
+  leftovers.
+- **The peer set converges to exactly what was sent.** The update was additive and removed nothing,
+  so a retired node kept a working key and a peer once given the wrong endpoint kept it forever.
+  Failing to READ the current peers plans no removals, because treating that as "no peers" would
+  tear down every working tunnel on the node.
+- **An install that dies before it fetches its command list reports `INSTALL_ERROR`.** The node used
+  to stay at `not_installed` with a dead installer, so the provisioning job waited out its whole
+  readiness clock. A transient fetch failure is retried rather than treated as fatal.
+
+### Removed
+
+- **The cluster VIP.** Nothing ever connected to it. A search of every RunOS repo found no consumer,
+  and the Kubernetes API endpoint is reached through DNS and a per-node haproxy instead. It was the
+  only thing in the agent that assumed a node address begins `172.24`, and it carried a live defect:
+  it pinned host `.254` while nodes are allocated 1 to 254 inclusive, so the 254th node in a cluster
+  would have taken its address. All 254 host addresses are now usable.
+- **The stale in-repo `node_agent_installer.sh` and `node_agent_updater.sh` copies.** Nothing read
+  them, and they had drifted from the templates repo in both directions.
+
+### Repository
+
+- **A leak gate now blocks credentials and new internal identifiers from this public repo.** It runs
+  on the staged diff at commit time, on the whole tracked tree on demand, and inside
+  `scripts/release.sh`, where it cannot be skipped. A credential shape hard-fails always. An
+  internal identifier ratchets against a baseline, so an existing finding passes and a new one
+  fails. Existing identifiers were removed from the tree in the same change.
+
 ## v1.8.0-rc.34
 
 ### Fixed
