@@ -7,6 +7,23 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.1
+
+Four fixes. One changes runtime behaviour on uninstall; the other three harden the
+secret-scanning gate that guards this public repository.
+
+### Fixed
+
+- **Uninstall now removes the DNS link guard, so a rebuilt node starts clean.** The
+  guard reinstated `wg0` after the uninstall had already torn it down, so the next
+  install found the interface already present and failed. Uninstall now removes the
+  helper script, both unit files and the resolver drop-in before it touches
+  WireGuard, which is the order that leaves nothing behind to re-create it.
+- **The leak gate now catches a RunOS personal access token**, and no longer skips a
+  tracked file it cannot read. A file it could not decode was silently passed at
+  every run point, so an unreadable file was indistinguishable from a clean one.
+- **A token hidden by NUL padding is no longer invisible to the gate.**
+
 ## v1.8.0
 
 Finalizes the v1.8.0 line (rc.1 through rc.34). This is the first node agent release since v1.7.2
