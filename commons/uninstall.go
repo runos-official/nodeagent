@@ -65,6 +65,39 @@ const (
 //
 // Data only. /etc/containerd and the packages stay, because a reinstall reuses them and only
 // needs the image store gone.
+// linkDNSGuardCleanupSteps removes the DNS link guard the install writes, and the dnsmasq
+// drop-in that waits on wg0.
+//
+// WHY IT MATTERS MORE THAN ORDINARY LITTER. runos-clear-link-dns.service is restart-on-failure
+// and carries Wants=wg-quick@wg0.service. On a node with no cluster it fails, restarts, and every
+// restart PULLS wg0 UP. So a box this uninstall reported as wiped still ran a failing RunOS
+// service in a permanent loop, and that loop raced the NEXT install: measured on a lab node
+// 2026-09-01, restart 3 created wg0 at 15:23:05 and the install's own bring-up failed one second
+// later with "`wg0' already exists", aborting it at INSTALL_ERROR.
+//
+// The .path unit is disabled FIRST and with --now: it is the thing that re-arms the service, so
+// removing fragments while it is still loaded leaves the timer running with nothing to describe
+// it. reset-failed is the same lesson the WireGuard block below learned, for the same reason:
+// systemd keeps a failed unit listed after its fragment is gone, and `is-system-running` then
+// answers DEGRADED on a box RunOS just wiped clean.
+//
+// It removes only what the install wrote. dnsmasq is a package RunOS configures, not one it owns,
+// so the drop-in goes and the package stays.
+func linkDNSGuardCleanupSteps() []string {
+	return []string{
+		"timeout 30 systemctl disable --now runos-clear-link-dns.path || true",
+		"timeout 30 systemctl disable --now runos-clear-link-dns.service || true",
+		"rm -f /etc/systemd/system/runos-clear-link-dns.path || true",
+		"rm -f /etc/systemd/system/runos-clear-link-dns.service || true",
+		"rm -f /usr/local/sbin/runos-clear-link-dns || true",
+		"rm -f /etc/systemd/system/dnsmasq.service.d/wait-for-wireguard.conf || true",
+		"rmdir /etc/systemd/system/dnsmasq.service.d 2>/dev/null || true",
+		"timeout 30 systemctl daemon-reload || true",
+		"timeout 30 systemctl reset-failed runos-clear-link-dns.service || true",
+		"timeout 30 systemctl reset-failed runos-clear-link-dns.path || true",
+	}
+}
+
 func runtimeDataWipeSteps() []string {
 	return []string{
 		"timeout -k 5 120 rm -rf /var/lib/containerd || true",
@@ -299,6 +332,15 @@ func Uninstall(full bool) error {
 	// The container runtime's image store. containerd was stopped a few lines above, so this is
 	// orphaned data by the time it runs. See runtimeDataWipeSteps for what it cost to leave it.
 	for _, s := range runtimeDataWipeSteps() {
+		step(s)
+	}
+	roslog.Println("done")
+
+	// --- DNS link guard (best-effort) --------------------------------------
+	// BEFORE the WireGuard block on purpose: this unit pulls wg0 back up every time it restarts,
+	// so tearing wg0 down first would just hand it a fresh interface to re-create.
+	roslog.Print("Removing DNS link guard... ")
+	for _, s := range linkDNSGuardCleanupSteps() {
 		step(s)
 	}
 	roslog.Println("done")

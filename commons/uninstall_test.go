@@ -460,3 +460,84 @@ func TestRuntimeDataWipeSteps_LeavesTheRuntimeInstalled(t *testing.T) {
 		}
 	}
 }
+
+// The DNS link guard survived every uninstall, and it does not sit still: it is a
+// restart-on-failure unit that carries Wants=wg-quick@wg0.service, so on a node with no cluster
+// it fails, restarts, and PULLS wg0 UP on every attempt.
+//
+// Measured on a lab node 2026-09-01, on the first install after a `nodes delete`:
+//
+//	15:23:05  runos-clear-link-dns.service: Scheduled restart job, restart counter is at 3
+//	15:23:05  Starting wg-quick@wg0.service ... [#] ip link add wg0 type wireguard
+//	15:23:06  wg-quick: `wg0' already exists   <- the install, one second later, aborted
+//
+// So a box RunOS reported as wiped still ran a failing RunOS service in a permanent restart loop,
+// and that loop broke the next install. The WireGuard block below it already learned this lesson
+// for its own files (goal 23 review, and the reset-failed that followed); these three were simply
+// never on the list.
+func TestLinkDNSGuardCleanupSteps_RemovesEveryFileTheInstallWrites(t *testing.T) {
+	joined := strings.Join(linkDNSGuardCleanupSteps(), "\n")
+
+	// Exactly what nodeward's 12_dns_link_guard.go and 12_dns.go put on the box.
+	for _, path := range []string{
+		"/usr/local/sbin/runos-clear-link-dns",
+		"/etc/systemd/system/runos-clear-link-dns.service",
+		"/etc/systemd/system/runos-clear-link-dns.path",
+		"/etc/systemd/system/dnsmasq.service.d/wait-for-wireguard.conf",
+	} {
+		if !strings.Contains(joined, path) {
+			t.Errorf("uninstall leaves %s behind, so the box is not wiped.\nsteps:\n%s", path, joined)
+		}
+	}
+}
+
+// Stopping it is not optional and must come BEFORE the files go. A unit whose fragment is deleted
+// while it is still loaded keeps its restart timer, so the pull-wg0-up loop outlives the files
+// that describe it.
+func TestLinkDNSGuardCleanupSteps_StopsTheLoopBeforeDeletingIt(t *testing.T) {
+	steps := linkDNSGuardCleanupSteps()
+	joined := strings.Join(steps, "\n")
+
+	stop := strings.Index(joined, "systemctl disable --now runos-clear-link-dns.path")
+	del := strings.Index(joined, "rm -f /etc/systemd/system/runos-clear-link-dns.service")
+	if stop < 0 {
+		t.Fatalf("the .path unit is what restarts the service; it must be disabled --now.\nsteps:\n%s", joined)
+	}
+	if del < 0 || stop > del {
+		t.Fatalf("the units must be stopped before their files are removed.\nsteps:\n%s", joined)
+	}
+
+	// systemd keeps a failed unit listed after its fragment is gone, which is what left
+	// `systemctl is-system-running` answering DEGRADED on a freshly wiped box.
+	if !strings.Contains(joined, "reset-failed runos-clear-link-dns") {
+		t.Errorf("clear the failed state too, or the wiped box reports DEGRADED.\nsteps:\n%s", joined)
+	}
+	if !strings.Contains(joined, "daemon-reload") {
+		t.Errorf("systemd must be reloaded after the fragments are removed.\nsteps:\n%s", joined)
+	}
+}
+
+// Same rule as every other best-effort block: bounded and non-fatal, or a wedged systemctl turns
+// into a permanent partial uninstall on every retry.
+func TestLinkDNSGuardCleanupSteps_AreBestEffortAndBounded(t *testing.T) {
+	for _, s := range linkDNSGuardCleanupSteps() {
+		if !strings.Contains(s, "|| true") {
+			t.Errorf("step is not best-effort, a failure would wedge the uninstall: %q", s)
+		}
+		if strings.HasPrefix(s, "systemctl") && !strings.Contains(s, "timeout") {
+			t.Errorf("systemctl step is unbounded, a wedged systemd would hang the uninstall: %q", s)
+		}
+	}
+}
+
+// It must not take dnsmasq itself with it. dnsmasq is a package RunOS configures, not one it owns,
+// and the drop-in is the only part of it the install wrote.
+func TestLinkDNSGuardCleanupSteps_RemovesOnlyTheDropInNotDnsmasq(t *testing.T) {
+	joined := strings.Join(linkDNSGuardCleanupSteps(), "\n")
+	if strings.Contains(joined, "apt-get remove") || strings.Contains(joined, "purge") {
+		t.Errorf("the cleanup must not uninstall dnsmasq itself:\n%s", joined)
+	}
+	if strings.Contains(joined, "rm -rf /etc/dnsmasq") {
+		t.Errorf("the cleanup must not remove dnsmasq's own configuration:\n%s", joined)
+	}
+}
