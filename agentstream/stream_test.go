@@ -1,10 +1,104 @@
 package agentstream
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/runos-official/nodeagent/l2sec"
+	"google.golang.org/protobuf/proto"
 )
+
+type blockingReplyStream struct {
+	l2sec.Nodeward_NodeAgentStreamClient
+	firstEntered chan struct{}
+	releaseFirst chan struct{}
+
+	mu   sync.Mutex
+	sent []*l2sec.FromNodeAgent
+}
+
+func (s *blockingReplyStream) Send(message *l2sec.FromNodeAgent) error {
+	s.mu.Lock()
+	isFirst := len(s.sent) == 0
+	s.mu.Unlock()
+	if isFirst {
+		close(s.firstEntered)
+		<-s.releaseFirst
+	}
+
+	snapshot := proto.Clone(message).(*l2sec.FromNodeAgent)
+	s.mu.Lock()
+	s.sent = append(s.sent, snapshot)
+	s.mu.Unlock()
+	return nil
+}
+
+func TestInstructionRepliesKeepTheirOriginatingTagsAtSendBoundary(t *testing.T) {
+	stream := &blockingReplyStream{
+		firstEntered: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+
+	streamMutex.Lock()
+	previousStream := globalStream
+	globalStream = stream
+	streamMutex.Unlock()
+	previousTag := NoContentResponse.Tag
+	NoContentResponse.Tag = ""
+	t.Cleanup(func() {
+		streamMutex.Lock()
+		globalStream = previousStream
+		streamMutex.Unlock()
+		NoContentResponse.Tag = previousTag
+	})
+
+	first := finalizeInstructionResponse(
+		&l2sec.ToNodeAgent{Tag: "first-request"},
+		NoContentResponse,
+		nil,
+	)
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- SendToNodeward(first)
+	}()
+	<-stream.firstEntered
+
+	second := finalizeInstructionResponse(
+		&l2sec.ToNodeAgent{Tag: "second-request"},
+		NoContentResponse,
+		nil,
+	)
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- SendToNodeward(second)
+	}()
+
+	close(stream.releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("send first response: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("send second response: %v", err)
+	}
+
+	stream.mu.Lock()
+	sent := append([]*l2sec.FromNodeAgent(nil), stream.sent...)
+	stream.mu.Unlock()
+	if len(sent) != 2 {
+		t.Fatalf("expected two replies, got %d", len(sent))
+	}
+	if sent[0].Tag != "first-request" {
+		t.Fatalf("first reply used tag %q", sent[0].Tag)
+	}
+	if sent[1].Tag != "second-request" {
+		t.Fatalf("second reply used tag %q", sent[1].Tag)
+	}
+	for i, reply := range sent {
+		if reply.Type != "NO_CONTENT" || reply.JsonB64 != "e30=" {
+			t.Fatalf("reply %d changed wire payload: type=%q jsonB64=%q", i, reply.Type, reply.JsonB64)
+		}
+	}
+}
 
 // TestSafeHandleInstruction_RecoversFromPanic is the core guard for the key
 // fix: a panic in the instruction-handling path must NOT escape the worker

@@ -8,6 +8,7 @@ import (
 
 	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"google.golang.org/protobuf/proto"
 )
 
 // Number of worker goroutines to spawn
@@ -198,6 +199,14 @@ func processInstructions(
 // process). On panic it logs the value plus a stack trace and returns an ERROR
 // response tagged for correlation, so the worker continues serving instructions.
 func safeHandleInstruction(workerID int, instruction *l2sec.ToNodeAgent) (response *l2sec.FromNodeAgent) {
+	return safeHandleInstructionWith(workerID, instruction, handleInstruction)
+}
+
+func safeHandleInstructionWith(
+	workerID int,
+	instruction *l2sec.ToNodeAgent,
+	handle func(*l2sec.ToNodeAgent) *l2sec.FromNodeAgent,
+) (response *l2sec.FromNodeAgent) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Read tag/type defensively: the panic may itself have come from a
@@ -222,7 +231,7 @@ func safeHandleInstruction(workerID int, instruction *l2sec.ToNodeAgent) (respon
 		}
 	}()
 
-	return handleInstruction(instruction)
+	return handle(instruction)
 }
 
 // handleInstruction processes a single instruction and returns a response
@@ -293,6 +302,11 @@ func handleInstruction(instruction *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
 		err = fmt.Errorf("unknown instruction type: %s", instruction.Type)
 	}
 
+	return finalizeInstructionResponse(instruction, response, err)
+}
+
+// finalizeInstructionResponse applies the common reply contract after a handler returns.
+func finalizeInstructionResponse(instruction *l2sec.ToNodeAgent, response *l2sec.FromNodeAgent, err error) *l2sec.FromNodeAgent {
 	// Handle any errors from instruction processing
 	if err != nil {
 		roslog.E("Error processing instruction", err, "type", instruction.Type, "tag", instruction.Tag)
@@ -308,6 +322,9 @@ func handleInstruction(instruction *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
 		return nil
 	}
 
+	// A handler can return a shared immutable template. Clone the response before
+	// request-specific mutation so concurrent workers cannot change another reply.
+	response = proto.Clone(response).(*l2sec.FromNodeAgent)
 	response.Tag = instruction.Tag
 
 	roslog.I("Response from agent stream", "type", response.Type, "tag", response.Tag)
