@@ -33,6 +33,24 @@ const (
 // HandleUpdateDnsmasq decodes an UPDATE_DNSMASQ instruction and rewrites the
 // dnsmasq configuration, keeping a backup of the previous file.
 func HandleUpdateDnsmasq(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
+	return handleUpdateDnsmasq(
+		instruction,
+		isContentChanged,
+		updateDnsmasqConfigAtomic,
+		restartDnsmasqService,
+		restoreBackup,
+		cleanupBackup,
+	)
+}
+
+func handleUpdateDnsmasq(
+	instruction *pb.ToNodeAgent,
+	contentChanged func(string) bool,
+	updateConfig func(string) error,
+	restartService func() error,
+	restoreConfig func() error,
+	cleanupConfig func(),
+) (*pb.FromNodeAgent, error) {
 	roslog.D("Executing HandleUpdateDnsmasq")
 
 	// Acquire the mutex to prevent concurrent updates
@@ -57,29 +75,29 @@ func HandleUpdateDnsmasq(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error)
 	}
 
 	// Check if the new content is different from the existing file
-	if !isContentChanged(request.FileContents) {
+	if !contentChanged(request.FileContents) {
 		roslog.D("dnsmasq configuration unchanged, skipping restart")
 		return NoContentResponse, nil
 	}
 
 	// Update the dnsmasq configuration file atomically
-	if err := updateDnsmasqConfigAtomic(request.FileContents); err != nil {
+	if err := updateConfig(request.FileContents); err != nil {
 		roslog.E("Error updating dnsmasq configuration", err)
 		return nil, err
 	}
 
 	// Restart dnsmasq service
-	if err := restartDnsmasqService(); err != nil {
+	if err := restartService(); err != nil {
 		roslog.E("Error restarting dnsmasq service", err)
 		// Try to restore backup if restart fails
-		if restoreErr := restoreBackup(); restoreErr != nil {
+		if restoreErr := restoreConfig(); restoreErr != nil {
 			roslog.E("Error restoring backup after failed restart", restoreErr)
 		}
 		return nil, err
 	}
 
 	// Clean up backup file on successful completion
-	cleanupBackup()
+	cleanupConfig()
 
 	roslog.D("Successfully updated dnsmasq configuration and restarted service")
 	return NoContentResponse, nil

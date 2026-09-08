@@ -33,8 +33,12 @@ const uninstallStartDelaySeconds = 3
 // API server. The reply says "scheduled", which is the truth: the uninstall has not
 // happened yet when nodeward reads it, and the node record is deleted regardless.
 func HandleUninstallNode() (*pb.FromNodeAgent, error) {
+	return handleUninstallNode(scheduleDetachedUninstall)
+}
+
+func handleUninstallNode(schedule func(int) error) (*pb.FromNodeAgent, error) {
 	roslog.I("Executing HandleUninstallNode: scheduling a detached uninstall and reboot")
-	if err := scheduleDetachedUninstall(uninstallStartDelaySeconds); err != nil {
+	if err := schedule(uninstallStartDelaySeconds); err != nil {
 		roslog.E("Could not schedule the detached uninstall; nothing was removed", err)
 		return nil, err
 	}
@@ -48,27 +52,50 @@ func HandleUninstallNode() (*pb.FromNodeAgent, error) {
 // wipe, and on a clean wipe the machine reboots so cilium links, DRBD modules and any
 // reparented process are gone and the box comes back joinable.
 func scheduleDetachedUninstall(delay int) error {
+	runner := uninstallCommandRunner{
+		lookPath: exec.LookPath,
+		run: func(name string, args ...string) ([]byte, error) {
+			return exec.Command(name, args...).CombinedOutput()
+		},
+		start: func(name string, args ...string) (int, error) {
+			cmd := exec.Command(name, args...)
+			if err := cmd.Start(); err != nil {
+				return 0, err
+			}
+			return cmd.Process.Pid, nil
+		},
+	}
+	return scheduleDetachedUninstallWith(delay, runner)
+}
+
+type uninstallCommandRunner struct {
+	lookPath func(string) (string, error)
+	run      func(string, ...string) ([]byte, error)
+	start    func(string, ...string) (int, error)
+}
+
+func scheduleDetachedUninstallWith(delay int, runner uninstallCommandRunner) error {
 	script := fmt.Sprintf(
 		"sleep %d; /usr/local/bin/runos uninstall --yes; systemctl reboot",
 		delay,
 	)
-	path, err := exec.LookPath("systemd-run")
+	path, err := runner.lookPath("systemd-run")
 	if err != nil {
 		// No systemd-run: fall back to a setsid'd shell, which also survives the agent's
 		// stop because it is reparented to init rather than to runos.service.
-		cmd := exec.Command("setsid", "/bin/sh", "-c", script)
-		if startErr := cmd.Start(); startErr != nil {
+		pid, startErr := runner.start("setsid", "/bin/sh", "-c", script)
+		if startErr != nil {
 			return fmt.Errorf("setsid fallback failed: %w", startErr)
 		}
-		roslog.I("Detached uninstall scheduled via setsid", "pid", cmd.Process.Pid)
+		roslog.I("Detached uninstall scheduled via setsid", "pid", pid)
 		return nil
 	}
-	cmd := exec.Command(path,
+	out, runErr := runner.run(path,
 		"--collect",
 		"--description", "RunOS node uninstall and reboot",
 		"/bin/sh", "-c", script,
 	)
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+	if runErr != nil {
 		return fmt.Errorf("systemd-run failed: %v (%s)", runErr, string(out))
 	}
 	roslog.I("Detached uninstall scheduled via systemd-run", "delaySeconds", delay)

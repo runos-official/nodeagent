@@ -19,6 +19,10 @@ type applyCRRequest struct {
 // HandleApplyCR decodes an APPLY_CR instruction and applies the embedded custom
 // resource manifest to the cluster.
 func HandleApplyCR(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
+	return handleApplyCR(instruction, applyCR)
+}
+
+func handleApplyCR(instruction *pb.ToNodeAgent, apply func(string) error) (*pb.FromNodeAgent, error) {
 	roslog.I("Executing HandleApplyCR")
 
 	var request applyCRRequest
@@ -27,7 +31,7 @@ func HandleApplyCR(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
 		return nil, err
 	}
 
-	if err := applyCR(request.CrB64); err != nil {
+	if err := apply(request.CrB64); err != nil {
 		roslog.E("Error applying CR", err)
 		return nil, err
 	}
