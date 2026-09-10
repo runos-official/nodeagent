@@ -7,6 +7,21 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.2-rc.1
+
+One fix to how the agent replies to instructions, in support of node teardown
+reporting on the control plane.
+
+### Fixed
+
+- **Concurrent instruction replies no longer overwrite each other's correlation
+  tags.** Two instructions handled at the same time could answer with each
+  other's tag, so the control plane could read an acknowledgement for an
+  uninstall it never sent, or miss the one it did. Each reply now carries the
+  tag of the instruction it answers. Uninstall scheduling, its delay and
+  ordering, the reboot, and every existing reply format are unchanged, and an
+  acknowledgement still means the uninstall was scheduled, not that it ran.
+
 ## v1.8.1
 
 Four fixes. One changes runtime behaviour on uninstall; the other three harden the
