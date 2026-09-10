@@ -13,6 +13,13 @@ const RemoveEtcdMemberRequestType = "REMOVE_ETCD_MEMBER"
 // HandleRemoveEtcdMember decodes a REMOVE_ETCD_MEMBER instruction and removes the
 // etcd member matching the given node IP.
 func HandleRemoveEtcdMember(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
+	return handleRemoveEtcdMember(instruction, k8s.RemoveEtcdMemberViaEtcdCtlByIP)
+}
+
+func handleRemoveEtcdMember(
+	instruction *pb.ToNodeAgent,
+	removeMember func(string) error,
+) (*pb.FromNodeAgent, error) {
 	roslog.I("Executing HandleRemoveEtcdMember")
 
 	type requestType struct {
@@ -25,7 +32,7 @@ func HandleRemoveEtcdMember(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, err
 	}
 
 	// Remove the etcd member using the helper function
-	if err := k8s.RemoveEtcdMemberViaEtcdCtlByIP(request.NodeIP); err != nil {
+	if err := removeMember(request.NodeIP); err != nil {
 		roslog.E("Error removing etcd member", err)
 		return nil, err
 	}

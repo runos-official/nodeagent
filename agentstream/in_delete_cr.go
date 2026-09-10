@@ -18,6 +18,13 @@ type deleteCRRequest struct {
 // HandleDeleteCR decodes a DELETE_CR instruction and deletes the referenced
 // custom resource from the cluster.
 func HandleDeleteCR(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
+	return handleDeleteCR(instruction, k8s.DeleteCR)
+}
+
+func handleDeleteCR(
+	instruction *pb.ToNodeAgent,
+	deleteResource func(string, string, string, string, string) error,
+) (*pb.FromNodeAgent, error) {
 	roslog.I("Executing HandleDeleteCR")
 
 	var request deleteCRRequest
@@ -26,7 +33,7 @@ func HandleDeleteCR(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
 		return nil, err
 	}
 
-	if err := k8s.DeleteCR("runos.com", "v1", request.Type, request.ID, request.ID); err != nil {
+	if err := deleteResource("runos.com", "v1", request.Type, request.ID, request.ID); err != nil {
 		roslog.E("Error deleting CR", err)
 		return nil, err
 	}

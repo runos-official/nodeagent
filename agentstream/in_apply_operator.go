@@ -18,6 +18,10 @@ type applyOperatorRequest struct {
 // HandleApplyOperator decodes an APPLY_OPERATOR instruction and applies the
 // embedded operator manifest to the cluster.
 func HandleApplyOperator(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
+	return handleApplyOperator(instruction, applyOperator)
+}
+
+func handleApplyOperator(instruction *pb.ToNodeAgent, apply func(string) error) (*pb.FromNodeAgent, error) {
 	jsonData, err := base64.StdEncoding.DecodeString(instruction.JsonB64)
 	if err != nil {
 		roslog.E("Error decoding JSON payload", err)
@@ -30,7 +34,7 @@ func HandleApplyOperator(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error)
 		return nil, err
 	}
 
-	if err := applyOperator(request.CrdB64); err != nil {
+	if err := apply(request.CrdB64); err != nil {
 		roslog.E("Error applying operator", err)
 		return nil, err
 	}
