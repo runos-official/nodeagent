@@ -89,10 +89,14 @@ if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1;
   die "tag $VERSION already exists on origin"
 fi
 
-# CHANGELOG must carry a section for exactly this version (explicit-arg model).
-grep -qE "^## ${VERSION//./\\.}([[:space:]]|$)" CHANGELOG.md || \
-  die "CHANGELOG.md has no '## $VERSION' section (add release notes first)"
-ok "CHANGELOG has a $VERSION section"
+# CHANGELOG must carry a section for this version. An -rc.N (or any
+# prerelease) tag maps to its BASE version's section: dev RCs and the final
+# prod release of the same vX.Y.Z share one set of notes, so we strip the
+# prerelease suffix before looking it up (v1.8.2-rc.3 -> v1.8.2).
+CHANGELOG_VERSION="${VERSION%%-*}"
+grep -qE "^## ${CHANGELOG_VERSION//./\\.}([[:space:]]|$)" CHANGELOG.md || \
+  die "CHANGELOG.md has no '## $CHANGELOG_VERSION' section (add release notes first)"
+ok "CHANGELOG has a $CHANGELOG_VERSION section"
 
 # Working tree must be clean.
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty; commit or stash first"

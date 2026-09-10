@@ -7,7 +7,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
-## v1.8.2-rc.1
+## v1.8.2
 
 One fix to how the agent replies to instructions, in support of node teardown
 reporting on the control plane.

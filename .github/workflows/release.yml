@@ -69,14 +69,17 @@ jobs:
         id: notes
         run: |
           VERSION="${GITHUB_REF_NAME}"
+          # An -rc.N (or any prerelease) tag shares its base version's notes:
+          # dev RCs and the final release of the same vX.Y.Z use one section.
+          BASE="${VERSION%%-*}"
           # Print lines after "## vX.Y.Z" until the next "## " heading or EOF.
           NOTES=$(awk "
-            /^## ${VERSION}/ { found=1; next }
+            /^## ${BASE}([[:space:]]|\$)/ { found=1; next }
             found && /^## /  { exit }
             found            { print }
           " CHANGELOG.md | awk 'NF{p=1} p')
           if [ -z "$NOTES" ]; then
-            echo "No changelog entry found for ${VERSION}, using auto-generated notes"
+            echo "No changelog entry found for ${BASE}, using auto-generated notes"
             echo "found=false" >> "$GITHUB_OUTPUT"
           else
             echo "found=true" >> "$GITHUB_OUTPUT"
