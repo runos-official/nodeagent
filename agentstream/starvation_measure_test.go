@@ -220,9 +220,9 @@ func TestMeasureControlLatencyUnderSessionLoad(t *testing.T) {
 	}
 
 	type row struct {
-		sessions  int
-		p50, p99  time.Duration
-		bulkSent  int64
+		sessions int
+		p50, p99 time.Duration
+		bulkSent int64
 	}
 	var rows []row
 	for _, n := range []int{0, 1, 16} {

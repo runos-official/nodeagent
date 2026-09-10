@@ -1,0 +1,27 @@
+name: Formatting gate
+
+# This workflow follows the leak gate pattern. It runs on every push and every
+# pull request because day-to-day work lands outside main.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gofmt:
+    name: Formatting gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Reject unformatted Go files
+        run: |
+          gofmt_output="$(gofmt -l .)" && { [ -z "$gofmt_output" ] || { printf '%s\n' "$gofmt_output"; false; }; }

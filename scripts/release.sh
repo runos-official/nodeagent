@@ -18,8 +18,7 @@
 #                    CHANGELOG has a matching section, dev clean & synced,
 #                    deployed fast-forwardable, sensitivity scan (PUBLIC repo:
 #                    fail closed on secret-shaped content in the deploy payload).
-#   2. Code gates  - leak gate (PUBLIC repo: whole-tree scan for credentials and
-#                    un-baselined internal identifiers, cannot be skipped), then
+#   2. Code gates  - leak and scannability gates (PUBLIC repo), formatting,
 #                    go build ./..., go vet ./..., go test ./...
 #   3. Deploy      - tag the dev commit and push the tag + dev. main is NOT
 #                    touched (the human merges main after personal verification).
@@ -232,6 +231,10 @@ if ! SCAN_OUTPUT="$(python3 "$REPO_ROOT/scripts/unscannable_check.py" 2>&1)"; th
   die "scannability gate failed (public repo): leakcheck cannot read the files above, so it did not really scan them."
 fi
 ok "$(printf '%s' "$SCAN_OUTPUT" | tail -1)"
+
+step "Formatting"
+gofmt_output="$(gofmt -l .)" && { [ -z "$gofmt_output" ] || { printf '%s\n' "$gofmt_output"; false; }; } || die "gofmt failed: fix the errors or files above"
+ok "gofmt"
 
 step "Build"
 go build ./... || die "go build failed"
