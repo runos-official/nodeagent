@@ -37,6 +37,10 @@ test:
 vet:
 	@go vet ./...
 
+.PHONY: format-check
+format-check:
+	@gofmt_output="$$(gofmt -l .)" && { [ -z "$$gofmt_output" ] || { printf '%s\n' "$$gofmt_output"; false; }; }
+
 .PHONY: version
 version:
 	@echo "$(VERSION)"
@@ -109,6 +113,7 @@ help:
 	@echo "  make build    Build the binary for the current platform (version injected)"
 	@echo "  make test     Run the test suite (go test -race ./...)"
 	@echo "  make vet      Run go vet"
+	@echo "  make format-check Reject unformatted Go files"
 	@echo "  make version  Show the version that would be injected"
 	@echo "  make clean    Remove build artifacts"
 	@echo ""
