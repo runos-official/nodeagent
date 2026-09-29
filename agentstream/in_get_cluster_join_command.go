@@ -1,10 +1,12 @@
 package agentstream
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,10 +58,19 @@ func HandleGetClusterJoinCommand(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent
 	//var joinCmd string
 	if request.AsCp {
 		response.JoinCmd = getClusterJoinCommandAsCp()
+		if response.JoinCmd == "" {
+			return nil, fmt.Errorf("could not upload the control-plane certificates or generate a join command")
+		}
 		response.EncryptionKey = getEncryptionKey()
+		if response.EncryptionKey == "" {
+			return nil, fmt.Errorf("could not read the control-plane encryption key")
+		}
 		//joinCmd = getClusterJoinCommandAsCp()
 	} else {
 		response.JoinCmd = getMinJoinCommand()
+		if response.JoinCmd == "" {
+			return nil, fmt.Errorf("could not generate a worker join command")
+		}
 		//joinCmd = getMinJoinCommand()
 	}
 	//response := getClusterJoinCommandResponse{
@@ -82,7 +93,12 @@ func HandleGetClusterJoinCommand(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent
 // GetClusterJoinCommandAsCp
 // kubeadm join <control-plane-endpoint>:6443 --token <token> --discovery-token-ca-cert-hash sha256:<hash> --control-plane --certificate-key 074ab7df6359cb2c21e6a6e10c255065b162c7332ba231eec33a7e18fbd77a10
 func getClusterJoinCommandAsCp() string {
-	return getMinJoinCommand() + " --control-plane --certificate-key " + getCertKey()
+	join := getMinJoinCommand()
+	key := getCertKey()
+	if join == "" || key == "" {
+		return ""
+	}
+	return join + " --control-plane --certificate-key " + key
 }
 
 // GetClusterJoinCommandAsWorker
@@ -154,8 +170,11 @@ func getCertKey() string {
 
 	// Re-uploaded every time, not only when the key is new: it refreshes the Secret's expiry and
 	// restores it if something else has since overwritten it.
-	cmd := "kubeadm init phase upload-certs --upload-certs --certificate-key " + key
-	if _, err := exec.Command("/bin/sh", "-c", cmd).Output(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubeadm", "init", "phase", "upload-certs", "--upload-certs",
+		"--config=/etc/kubernetes/kubeadm-config.yaml", "--certificate-key", key)
+	if _, err := cmd.Output(); err != nil {
 		roslog.E("Error uploading cluster certificates", err)
 		return ""
 	}
