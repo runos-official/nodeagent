@@ -129,6 +129,7 @@ func getEncryptionKey() string {
 // certKeyPath caches the key this node last uploaded the cluster certificates with. A variable
 // rather than a constant so the tests can point it at a temporary directory.
 var certKeyPath = "/etc/kubernetes/enc/cert-upload-key.txt"
+var kubeadmConfigPath = "/etc/kubernetes/kubeadm-config.yaml"
 
 // certKeyReuseWindow is how long a cached key is reused. Comfortably inside kubeadm's own two-hour
 // expiry on the uploaded Secret, so a key handed out at the start of the window is still valid
@@ -170,10 +171,44 @@ func getCertKey() string {
 
 	// Re-uploaded every time, not only when the key is new: it refreshes the Secret's expiry and
 	// restores it if something else has since overwritten it.
+	// kubeadm rejects --config together with --certificate-key. Put the stable
+	// key in a private, short-lived copy of the cluster's InitConfiguration.
+	body, err := os.ReadFile(kubeadmConfigPath)
+	if err != nil {
+		roslog.E("Error reading kubeadm cluster configuration", err)
+		return ""
+	}
+	const marker = "kind: InitConfiguration\n"
+	if !strings.Contains(string(body), marker) {
+		roslog.E("Kubeadm cluster configuration has no InitConfiguration", fmt.Errorf("missing InitConfiguration"))
+		return ""
+	}
+	withKey := strings.Replace(string(body), marker, marker+"certificateKey: "+key+"\n", 1)
+	tmp, err := os.CreateTemp(filepath.Dir(kubeadmConfigPath), ".runos-kubeadm-upload-*.yaml")
+	if err != nil {
+		roslog.E("Error creating private kubeadm configuration", err)
+		return ""
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		roslog.E("Error protecting private kubeadm configuration", err)
+		return ""
+	}
+	if _, err := tmp.WriteString(withKey); err != nil {
+		tmp.Close()
+		roslog.E("Error writing private kubeadm configuration", err)
+		return ""
+	}
+	if err := tmp.Close(); err != nil {
+		roslog.E("Error closing private kubeadm configuration", err)
+		return ""
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "kubeadm", "init", "phase", "upload-certs", "--upload-certs",
-		"--config=/etc/kubernetes/kubeadm-config.yaml", "--certificate-key", key)
+		"--config="+tmp.Name(), "--skip-certificate-key-print")
 	if _, err := cmd.Output(); err != nil {
 		roslog.E("Error uploading cluster certificates", err)
 		return ""

@@ -15,9 +15,10 @@ reporting on the control plane.
 ### Fixed
 
 - **A new control-plane node can fetch its join certificates reliably.** The
-  existing control plane now uses the cluster's kubeadm configuration when it
-  uploads certificates for the join. A failed upload returns an error instead
-  of an unusable join command with an empty certificate key.
+  existing control plane now uses a private, short-lived copy of the cluster's
+  kubeadm configuration with its stable certificate key when it uploads
+  certificates for the join. A failed upload returns an error instead of an
+  unusable join command with an empty certificate key.
 - **Concurrent instruction replies no longer overwrite each other's correlation
   tags.** Two instructions handled at the same time could answer with each
   other's tag, so the control plane could read an acknowledgement for an
