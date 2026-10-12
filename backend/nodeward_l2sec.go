@@ -21,6 +21,44 @@ import (
 // loop in the agent retries dialing on its own backoff schedule.
 const l2secDialTimeout = 20 * time.Second
 
+// l2secConnectBackoff is grpc-go's reconnect schedule inside one dial. After
+// the first failed attempt grpc-go waits the base delay (0.5 s, no jitter).
+// After that it waits min(base*2^n, max) * (1 + jitter*(2r-1)); with jitter 1
+// that is full jitter, random in [0, 2 s], then [0, 4 s], up to [0, 30 s] at
+// the cap. The callers reach the dial at jittered times already (the agent's
+// reconnect loop, commons.NewReconnectBackoff), so agents that wait inside a
+// dial during a nodeward or nodehub restart stay spread out.
+var l2secConnectBackoff = backoff.Config{
+	BaseDelay:  500 * time.Millisecond,
+	Multiplier: 2,
+	Jitter:     1,
+	MaxDelay:   15 * time.Second,
+}
+
+// l2secServiceConfig retries UNAVAILABLE on the idempotent unary methods
+// only: GetInstallVpnCommands and GetControlPlaneNodes read and change
+// nothing on nodeward. Every other unary method mints credentials or writes
+// state (RegenerateCertificate, GetClusterAgentCredentials,
+// GetNodeRegistrationToken, GetInstallCommands, ManualSync, UpdateStatus,
+// AddNodelog, UpdateNodeInstallationStatus), so a lost reply must reach the
+// caller and is never replayed here. Streams are not named, so they never
+// retry. FPL315 phase 8.
+const l2secServiceConfig = `{
+	"methodConfig": [{
+		"name": [
+			{"service": "runos.nodeward.proto.l2sec.Nodeward", "method": "GetInstallVpnCommands"},
+			{"service": "runos.nodeward.proto.l2sec.Nodeward", "method": "GetControlPlaneNodes"}
+		],
+		"retryPolicy": {
+			"maxAttempts": 4,
+			"initialBackoff": "0.5s",
+			"maxBackoff": "5s",
+			"backoffMultiplier": 2,
+			"retryableStatusCodes": ["UNAVAILABLE"]
+		}
+	}]
+}`
+
 // loadL2SecClientTLS loads and validates the mTLS material for the L2Sec channel:
 // the client keypair (certPath/keyPath) and the CA root (caPath, which must be a
 // valid PEM bundle). It returns a configured *tls.Config or an error. It NEVER
@@ -54,6 +92,8 @@ func loadL2SecClientTLS(certPath, keyPath, caPath, serverName string) (*tls.Conf
 		ServerName:   serverName,
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      ca,
+		// Runs after the normal chain and name checks (T-50).
+		VerifyConnection: verifyL2SecServerLeaf,
 	}, nil
 }
 
@@ -85,31 +125,9 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	defer dialCancel()
 	conn, err := grpc.DialContext(dialCtx, addrL2Sec,
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-		grpc.WithDefaultServiceConfig(`{
-            "serviceConfig": {
-                "healthCheckConfig": {
-                    "serviceName": ""
-                },
-                "retryPolicy": {
-                    "MaxAttempts": 0,
-                    "InitialBackoff": "0.1s",
-                    "MaxBackoff": "60s",
-                    "BackoffMultiplier": 2.0,
-                    "RetryableStatusCodes": [
-                        "UNAVAILABLE"
-                    ]
-                }
-            }
-        }`),
+		grpc.WithDefaultServiceConfig(l2secServiceConfig),
 		grpc.WithBlock(),
-		grpc.WithConnectParams(grpc.ConnectParams{
-			Backoff: backoff.Config{
-				BaseDelay:  100 * time.Millisecond,
-				Multiplier: 1.6,
-				Jitter:     0.2,
-				MaxDelay:   10 * time.Second,
-			},
-		}),
+		grpc.WithConnectParams(grpc.ConnectParams{Backoff: l2secConnectBackoff}),
 		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 			attemptCount++
 			roslog.I("Attempting connection", "attempt", attemptCount, "address", addrL2Sec)

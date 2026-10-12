@@ -120,39 +120,60 @@ func K8s() error {
 		JsonB64FileList: fileListEncoded,
 	}
 
-	// Retry logic for transient "node agent not connected" errors
-	// This can happen during cloud-init when there's a timing issue with stream connectivity
-	var res *pb.InstallCommandList
-	maxRetries := 5
-	retryDelay := 2 * time.Second
-
-	waitStarted := time.Time{}
-	lastWaitReason := ""
-	waitAnnounced := false
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	res, err := fetchInstallCommands(func() (*pb.InstallCommandList, error) {
 		// One deadline per call: a wait can outlive any single deadline by design. 90 s, not 30:
 		// the FIRST call after a wait ends is the expensive one, because nodeward then fetches the
 		// join command from the just-ready control plane, and a 30 s deadline there failed the
 		// install on the happy path the wait exists to serve (review defect 8).
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		res, err = c.GetInstallCommands(ctx, request)
-		cancel()
+		defer cancel()
+		return c.GetInstallCommands(ctx, request)
+	}, time.Sleep)
+	if err != nil {
+		return err
+	}
+
+	return commons.ProcessInstallCommandsStatusAware(res)
+}
+
+// fetchMaxAttempts bounds the transient-error retries of the install command fetch. With the
+// jittered reconnect backoff the waits are random in [0, 1 s], [0, 2 s], and so on up to [0, 30 s],
+// so 8 attempts allow up to 91 s (about 45 s on average). The old fixed schedule allowed 30 s over
+// 5 attempts; fewer attempts with jitter would end an install during a nodeward rollout that the
+// old schedule rode out (FPL315 phase 8).
+const fetchMaxAttempts = 8
+
+// fetchInstallCommands calls fetch until it returns a command list. A transient error (see
+// isTransientFetchError) waits a jittered backoff and retries, up to fetchMaxAttempts calls. The
+// wait-for-control-plane answer polls on its own bound and does not use the retry budget. Any other
+// error, or a spent budget, reports INSTALL_ERROR and returns an error. sleep is time.Sleep outside
+// tests.
+func fetchInstallCommands(fetch func() (*pb.InstallCommandList, error), sleep func(time.Duration)) (*pb.InstallCommandList, error) {
+	retry := commons.NewReconnectBackoff()
+
+	waitStarted := time.Time{}
+	lastWaitReason := ""
+	waitAnnounced := false
+
+	for attempt := 1; attempt <= fetchMaxAttempts; attempt++ {
+		res, err := fetch()
 		if err == nil {
-			break
+			if !waitStarted.IsZero() {
+				roslog.InstallInfo(fmt.Sprintf("A control plane is ready; joining after waiting %s", time.Since(waitStarted).Round(time.Second)))
+			}
+			return res, nil
 		}
 
-		// Check if this is a transient "not connected" error, or a transient transport error: a
-		// nodeward rollout (Unavailable) or a slow first call after a wait (DeadlineExceeded) is not
-		// a verdict on this install, and since the fetch failure now reports INSTALL_ERROR (G30-F3)
-		// it must not be reached by a blip that a retry would have carried through.
-		if isTransientFetchError(err) {
-			if attempt < maxRetries {
-				roslog.W("Install command fetch hit a transient error, retrying", err, "attempt", attempt, "delay", retryDelay)
-				time.Sleep(retryDelay)
-				retryDelay *= 2 // Exponential backoff
-				continue
-			}
+		// A transient "not connected" error (the cloud-init timing case: the stream is not yet
+		// registered on nodeward), or a transient transport error: a nodeward rollout (Unavailable)
+		// or a slow first call after a wait (DeadlineExceeded) is not a verdict on this install, and
+		// since the fetch failure reports INSTALL_ERROR (G30-F3) it must not be reached by a blip
+		// that a retry would have carried through.
+		if isTransientFetchError(err) && attempt < fetchMaxAttempts {
+			delay := retry.Next()
+			roslog.W("Install command fetch hit a transient error, retrying", err, "attempt", attempt, "delay", delay)
+			sleep(delay)
+			continue
 		}
 
 		// Nodeward says the cluster's control plane is not ready to be joined yet, and to ask
@@ -171,9 +192,9 @@ func K8s() error {
 			if decideWait(waited, waitForControlPlaneBound) == waitGiveUp {
 				roslog.E("Gave up waiting for a control plane", err, "waited", waited)
 				reportInstallError()
-				return fmt.Errorf("waited %s for a control plane to join and none became ready. Nodeward's last word: %s", waited, reason)
+				return nil, fmt.Errorf("waited %s for a control plane to join and none became ready. Nodeward's last word: %s", waited, reason)
 			}
-			time.Sleep(waitForControlPlanePoll)
+			sleep(waitForControlPlanePoll)
 			attempt-- // a wait is not a retry
 			continue
 		}
@@ -183,11 +204,8 @@ func K8s() error {
 		// instead of dumping a Go stack trace under the systemd service.
 		roslog.E("Error executing GetInstallCommands", err, "attempt", attempt)
 		reportInstallError()
-		return fmt.Errorf("could not fetch install commands from Nodeward after %d attempts: %w (check connectivity to Nodeward operations channel on TCP 9192 and that the node is registered)", maxRetries, err)
+		return nil, fmt.Errorf("could not fetch install commands from Nodeward after %d attempts: %w (check connectivity to Nodeward operations channel on TCP 9192 and that the node is registered)", attempt, err)
 	}
-	if !waitStarted.IsZero() {
-		roslog.InstallInfo(fmt.Sprintf("A control plane is ready; joining after waiting %s", time.Since(waitStarted).Round(time.Second)))
-	}
-
-	return commons.ProcessInstallCommandsStatusAware(res)
+	// Unreachable: the last attempt always returns above.
+	return nil, fmt.Errorf("could not fetch install commands from Nodeward after %d attempts", fetchMaxAttempts)
 }

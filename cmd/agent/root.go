@@ -189,16 +189,13 @@ func init() {
 	agentstream.InitControlPlaneNodesRegistry()
 }
 
-// Reconnect backoff bounds for the supervised stream loop. A transient
+// Reconnect backoff for the supervised stream loop. A transient
 // stream/connection error no longer exits the process (which would trigger a
 // full systemd Restart=always + re-run of the one-time VPN/VIP/HAProxy setup);
-// instead the per-connection services are torn down and re-established in-process
-// after an exponentially backed-off delay.
-const (
-	reconnectInitialBackoff = 1 * time.Second
-	reconnectMaxBackoff     = 60 * time.Second
-	reconnectBackoffFactor  = 2
-)
+// instead the per-connection services are torn down and re-established
+// in-process after a jittered wait (commons.NewReconnectBackoff: random in
+// [0, cap], cap 1 s doubling to 30 s, reset after 60 s up). The jitter keeps a
+// nodeward or nodehub restart from reconnecting every agent in the same second.
 
 // vpnResyncInterval is the cadence of the background VPN peer self-heal. The
 // per-(re)connect sync in runConnection handles the common case; this slow
@@ -268,58 +265,52 @@ func runAgent() {
 		rootCancel()
 	}()
 
-	// stableConnectionThreshold: a connection that stayed up at least this long
-	// is considered healthy, so the backoff resets to its initial value (we don't
-	// want a brief outage hours later to inherit a maxed-out backoff).
-	const stableConnectionThreshold = 2 * time.Minute
-
-	backoff := reconnectInitialBackoff
-	for {
-		if rootCtx.Err() != nil {
-			break
-		}
-
-		// runConnection establishes one connection and runs the per-connection
-		// services until any of them stops or the root context is cancelled. It
-		// returns true if the root context was cancelled (shut down for good),
-		// false if it ended due to a recoverable stream/connection error.
-		connStart := time.Now()
-		shutdown := runConnection(rootCtx)
-		if shutdown {
-			break
-		}
-
-		// If the connection was stable for a while, reset the backoff.
-		if time.Since(connStart) >= stableConnectionThreshold {
-			backoff = reconnectInitialBackoff
-		}
-
-		// Recoverable error: back off, then re-dial. The per-connection services,
-		// including the VPN peer sync, are re-established by the next runConnection.
-		roslog.W("Connection to Nodeward lost; reconnecting after backoff", nil, "backoff", backoff.String())
-		select {
-		case <-rootCtx.Done():
-			roslog.I("Shutdown requested during reconnect backoff")
-		case <-time.After(backoff):
-		}
-
-		// Exponential backoff, capped.
-		backoff *= reconnectBackoffFactor
-		if backoff > reconnectMaxBackoff {
-			backoff = reconnectMaxBackoff
-		}
-	}
+	superviseConnections(rootCtx, commons.NewReconnectBackoff(), runConnection, waitOrDone)
 
 	roslog.I("Agent terminated")
+}
+
+// superviseConnections runs connect until it reports a shutdown. After each
+// recoverable end it waits b's next delay. connect returns how long the
+// connection stayed up (0 when it never came up); a long enough run resets b.
+func superviseConnections(
+	rootCtx context.Context,
+	b *commons.Backoff,
+	connect func(context.Context) (shutdown bool, upFor time.Duration),
+	wait func(context.Context, time.Duration),
+) {
+	for rootCtx.Err() == nil {
+		shutdown, upFor := connect(rootCtx)
+		if shutdown {
+			return
+		}
+		// Recoverable error: back off, then re-dial. The per-connection services,
+		// including the VPN peer sync, are re-established by the next connect.
+		delay := b.AfterConnection(upFor)
+		roslog.W("Connection to Nodeward lost; reconnecting after backoff", nil,
+			"backoff", delay.String(), "up_for", upFor.Round(time.Second).String())
+		wait(rootCtx, delay)
+	}
+}
+
+// waitOrDone sleeps for d or until ctx ends.
+func waitOrDone(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		roslog.I("Shutdown requested during reconnect backoff")
+	case <-t.C:
+	}
 }
 
 // runConnection establishes a single Nodeward connection and runs the
 // per-connection services (instruction stream, HAProxy proxy, heartbeat) until
 // one stops or rootCtx is cancelled. The returned bool is true iff rootCtx was
 // cancelled (permanent shutdown), false on a recoverable error that should
-// trigger a reconnect. On a successful, fully-started connection the reconnect
-// backoff is reset by the caller via the return path below.
-func runConnection(rootCtx context.Context) (shutdown bool) {
+// trigger a reconnect. upFor is how long the stream stayed up (0 when it never
+// came up); the caller resets the reconnect backoff after a long enough run.
+func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration) {
 	// Per-connection context: cancelled when this connection ends so all of its
 	// services unwind, independent of rootCtx (which spans all connections).
 	connCtx, connCancel := context.WithCancel(rootCtx)
@@ -330,15 +321,16 @@ func runConnection(rootCtx context.Context) (shutdown bool) {
 	c, _, _, conn, err := backend.NodewardL2Sec()
 	if err != nil {
 		roslog.E("Error connecting to Nodeward", err)
-		return rootCtx.Err() != nil
+		return rootCtx.Err() != nil, 0
 	}
 	defer conn.Close()
 
 	stream, err := c.NodeAgentStream(context.Background())
 	if err != nil {
 		roslog.E("Error establishing stream", err)
-		return rootCtx.Err() != nil
+		return rootCtx.Err() != nil, 0
 	}
+	connectedAt := time.Now()
 
 	roslog.D("Stream established, starting services")
 
@@ -402,6 +394,8 @@ func runConnection(rootCtx context.Context) (shutdown bool) {
 		roslog.I("Heartbeat manager stopped")
 		reason = "heartbeat_stopped"
 	}
+	// Measure before the teardown wait, which can add up to 30 s.
+	upFor = time.Since(connectedAt)
 
 	// Cancel the per-connection context so all services unwind.
 	connCancel()
@@ -416,7 +410,7 @@ func runConnection(rootCtx context.Context) (shutdown bool) {
 		}
 	}
 
-	return shutdown
+	return shutdown, upFor
 }
 
 // waitConnectionServicesDone waits for the three per-connection service channels
