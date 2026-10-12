@@ -61,3 +61,39 @@ func TestReconnectBackoffResetsAfterAStableConnection(t *testing.T) {
 		t.Fatalf("a failed dial after the reset: wait %s, want the 2 s cap", got)
 	}
 }
+
+func TestNewReconnectBackoffWithUsesTheGivenSource(t *testing.T) {
+	b := NewReconnectBackoffWith(func(n int64) int64 { return n - 1 })
+	want := []time.Duration{1, 2, 4, 8, 16, 30, 30}
+	for i, w := range want {
+		if got := b.Next(); got != w*time.Second {
+			t.Fatalf("wait %d = %s, want %s", i+1, got, w*time.Second)
+		}
+	}
+}
+
+// One node's own retry loop (the install command fetch) needs a floor: equal
+// jitter waits random in [cap/2, cap], so the total wait before giving up
+// cannot collapse toward 0.
+func TestRetryBackoffIsEqualJitter(t *testing.T) {
+	low := NewRetryBackoffWith(func(int64) int64 { return 0 })
+	high := NewRetryBackoffWith(func(n int64) int64 { return n - 1 })
+	caps := []time.Duration{1, 2, 4, 8, 16, 30, 30}
+	for i, c := range caps {
+		c *= time.Second
+		if got := low.Next(); got != c/2 {
+			t.Fatalf("lowest wait %d = %s, want %s", i+1, got, c/2)
+		}
+		if got := high.Next(); got != c {
+			t.Fatalf("highest wait %d = %s, want %s", i+1, got, c)
+		}
+	}
+
+	b := NewRetryBackoff()
+	for i := 0; i < 200; i++ {
+		b.Reset()
+		if w := b.Next(); w < 500*time.Millisecond || w > time.Second {
+			t.Fatalf("first wait %s is outside [0.5s, 1s]", w)
+		}
+	}
+}

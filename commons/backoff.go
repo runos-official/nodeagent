@@ -16,22 +16,45 @@ const (
 	ReconnectStableTime = 60 * time.Second
 )
 
-// Backoff is capped exponential backoff with full jitter. It is not safe for
+// Backoff is capped exponential backoff with jitter. It is not safe for
 // concurrent use; each retry loop owns one.
 type Backoff struct {
 	base, max, stable time.Duration
 	attempt           int
-	rand              func(n int64) int64 // returns [0, n); swapped in tests
+	equal             bool                // equal jitter: wait in [cap/2, cap]
+	rand              func(n int64) int64 // returns [0, n)
 }
 
-// NewReconnectBackoff returns a Backoff with the reconnect bounds above.
+// NewReconnectBackoff returns a full jitter Backoff with the reconnect bounds
+// above: each wait is random in [0, cap].
 func NewReconnectBackoff() *Backoff {
+	return NewReconnectBackoffWith(rand.Int64N)
+}
+
+// NewReconnectBackoffWith is NewReconnectBackoff with the given random source.
+// rand(n) must return a value in [0, n). Tests pin it.
+func NewReconnectBackoffWith(rand func(n int64) int64) *Backoff {
 	return &Backoff{
 		base:   ReconnectBaseCap,
 		max:    ReconnectMaxCap,
 		stable: ReconnectStableTime,
-		rand:   rand.Int64N,
+		rand:   rand,
 	}
+}
+
+// NewRetryBackoff returns a Backoff with the same caps but equal jitter: each
+// wait is random in [cap/2, cap]. Use it for one node's own retry loop that
+// gives up after a number of attempts, so the total wait has a floor and a
+// run of small draws cannot end the loop early.
+func NewRetryBackoff() *Backoff {
+	return NewRetryBackoffWith(rand.Int64N)
+}
+
+// NewRetryBackoffWith is NewRetryBackoff with the given random source.
+func NewRetryBackoffWith(rand func(n int64) int64) *Backoff {
+	b := NewReconnectBackoffWith(rand)
+	b.equal = true
+	return b
 }
 
 // Next returns the next wait and doubles the cap for the wait after it.
@@ -43,6 +66,10 @@ func (b *Backoff) Next() time.Duration {
 		}
 	}
 	b.attempt++
+	if b.equal {
+		half := limit / 2
+		return half + time.Duration(b.rand(int64(limit-half)+1))
+	}
 	return time.Duration(b.rand(int64(limit) + 1))
 }
 

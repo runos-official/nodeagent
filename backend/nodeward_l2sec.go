@@ -21,18 +21,18 @@ import (
 // loop in the agent retries dialing on its own backoff schedule.
 const l2secDialTimeout = 20 * time.Second
 
-// l2secConnectBackoff is grpc-go's reconnect schedule inside one dial. After
-// the first failed attempt grpc-go waits the base delay (0.5 s, no jitter).
-// After that it waits min(base*2^n, max) * (1 + jitter*(2r-1)); with jitter 1
-// that is full jitter, random in [0, 2 s], then [0, 4 s], up to [0, 30 s] at
-// the cap. The callers reach the dial at jittered times already (the agent's
-// reconnect loop, commons.NewReconnectBackoff), so agents that wait inside a
-// dial during a nodeward or nodehub restart stay spread out.
+// l2secConnectBackoff is grpc-go's reconnect schedule inside one dial. Most
+// callers dial once and never retry a failed dial (install, UpdateStatus,
+// AddNodelog, sync, certificate renew, status), so attempts must keep coming
+// through the whole l2secDialTimeout window: after a 10 s nodeward restart the
+// next attempt starts by about 18 s at worst. Keep the jitter small here.
+// Spreading the fleet over time is the job of the supervised reconnect loop
+// (commons.NewReconnectBackoff), not of this schedule (FPL315 review).
 var l2secConnectBackoff = backoff.Config{
-	BaseDelay:  500 * time.Millisecond,
-	Multiplier: 2,
-	Jitter:     1,
-	MaxDelay:   15 * time.Second,
+	BaseDelay:  100 * time.Millisecond,
+	Multiplier: 1.6,
+	Jitter:     0.2,
+	MaxDelay:   10 * time.Second,
 }
 
 // l2secServiceConfig retries UNAVAILABLE on the idempotent unary methods
@@ -117,27 +117,7 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 		return nil, nil, nil, nil, err
 	}
 
-	attemptCount := 0
-	// Bound a single dial attempt. We use DialContext with a timeout instead of
-	// grpc.WithBlock + no deadline, so a dead control plane cannot hang the dial
-	// forever; the agent's reconnect loop owns retry/backoff at a higher level.
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), l2secDialTimeout)
-	defer dialCancel()
-	conn, err := grpc.DialContext(dialCtx, addrL2Sec,
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-		grpc.WithDefaultServiceConfig(l2secServiceConfig),
-		grpc.WithBlock(),
-		grpc.WithConnectParams(grpc.ConnectParams{Backoff: l2secConnectBackoff}),
-		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-			attemptCount++
-			roslog.I("Attempting connection", "attempt", attemptCount, "address", addrL2Sec)
-			err := invoker(ctx, method, req, reply, cc, opts...)
-			if err != nil {
-				roslog.W("Connection attempt failed", err, "attempt", attemptCount)
-			}
-			return err
-		}),
-	)
+	conn, err := dialL2Sec(addrL2Sec, credentials.NewTLS(tlsConfig))
 	if err != nil {
 		// Transient connect failure: return the error so the caller can back off
 		// and re-dial instead of crashing the process.
@@ -156,4 +136,30 @@ func NodewardL2Sec() (l2sec.NodewardClient, context.Context, context.CancelFunc,
 	c := l2sec.NewNodewardClient(conn)
 
 	return c, ctx, cancel, conn, nil
+}
+
+// dialL2Sec dials addr with the L2Sec connect schedule and service config,
+// bounded by l2secDialTimeout.
+func dialL2Sec(addr string, creds credentials.TransportCredentials) (*grpc.ClientConn, error) {
+	attemptCount := 0
+	// Bound a single dial attempt. We use DialContext with a timeout instead of
+	// grpc.WithBlock + no deadline, so a dead control plane cannot hang the dial
+	// forever; the agent's reconnect loop owns retry/backoff at a higher level.
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), l2secDialTimeout)
+	defer dialCancel()
+	return grpc.DialContext(dialCtx, addr,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithDefaultServiceConfig(l2secServiceConfig),
+		grpc.WithBlock(),
+		grpc.WithConnectParams(grpc.ConnectParams{Backoff: l2secConnectBackoff}),
+		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			attemptCount++
+			roslog.I("Attempting connection", "attempt", attemptCount, "address", addr)
+			err := invoker(ctx, method, req, reply, cc, opts...)
+			if err != nil {
+				roslog.W("Connection attempt failed", err, "attempt", attemptCount)
+			}
+			return err
+		}),
+	)
 }

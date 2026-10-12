@@ -128,7 +128,7 @@ func K8s() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer cancel()
 		return c.GetInstallCommands(ctx, request)
-	}, time.Sleep)
+	}, newFetchRetryBackoff(), time.Sleep)
 	if err != nil {
 		return err
 	}
@@ -136,21 +136,27 @@ func K8s() error {
 	return commons.ProcessInstallCommandsStatusAware(res)
 }
 
-// fetchMaxAttempts bounds the transient-error retries of the install command fetch. With the
-// jittered reconnect backoff the waits are random in [0, 1 s], [0, 2 s], and so on up to [0, 30 s],
-// so 8 attempts allow up to 91 s (about 45 s on average). The old fixed schedule allowed 30 s over
-// 5 attempts; fewer attempts with jitter would end an install during a nodeward rollout that the
-// old schedule rode out (FPL315 phase 8).
+// fetchMaxAttempts bounds the transient-error retries of the install command fetch. The waits use
+// equal jitter (commons.NewRetryBackoff): random in [0.5 s, 1 s], [1 s, 2 s], and so on up to
+// [15 s, 30 s]. So 8 attempts always wait between 45.5 s and 91 s in total, never less than the
+// old fixed 30 s schedule, and installers that lost nodeward together still spread out. A full
+// jitter wait could add up to almost nothing and end an install the old schedule rode out
+// (FPL315 review).
 const fetchMaxAttempts = 8
 
+// fetchRetryFloor is the old fixed schedule's total wait (2+4+8+16 s). The retries never give up
+// sooner.
+const fetchRetryFloor = 30 * time.Second
+
+// newFetchRetryBackoff returns the install fetch's retry backoff.
+func newFetchRetryBackoff() *commons.Backoff { return commons.NewRetryBackoff() }
+
 // fetchInstallCommands calls fetch until it returns a command list. A transient error (see
-// isTransientFetchError) waits a jittered backoff and retries, up to fetchMaxAttempts calls. The
+// isTransientFetchError) waits retry's next delay and retries, up to fetchMaxAttempts calls. The
 // wait-for-control-plane answer polls on its own bound and does not use the retry budget. Any other
 // error, or a spent budget, reports INSTALL_ERROR and returns an error. sleep is time.Sleep outside
 // tests.
-func fetchInstallCommands(fetch func() (*pb.InstallCommandList, error), sleep func(time.Duration)) (*pb.InstallCommandList, error) {
-	retry := commons.NewReconnectBackoff()
-
+func fetchInstallCommands(fetch func() (*pb.InstallCommandList, error), retry *commons.Backoff, sleep func(time.Duration)) (*pb.InstallCommandList, error) {
 	waitStarted := time.Time{}
 	lastWaitReason := ""
 	waitAnnounced := false
