@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/runos-official/nodeagent/l1sec"
 	"github.com/runos-official/nodeagent/uc/csrcert/csrtest"
@@ -79,6 +80,33 @@ func TestRegisterSendsCSRAndStoresOwnKey(t *testing.T) {
 	caData, _ := os.ReadFile(p.CA)
 	if string(caData) != ca.PEM {
 		t.Fatal("CA not stored")
+	}
+}
+
+// Register spends the token before the agent sees the answer, so a slow local
+// clock must not refuse the certificate. Legacy agents registered fine here.
+func TestRegisterAcceptsCertificateFromServerClockAhead(t *testing.T) {
+	ca := csrtest.NewCA(t)
+	ca.ServerNow = func() time.Time { return time.Now().Add(15 * time.Minute) }
+	p := tempPaths(t)
+	var csrKey *ecdsa.PublicKey
+	f := &fakeL1{respond: func(in *pb.NodeRegistrationRequest) (*pb.NodeRegistrationResponse, error) {
+		leaf, csr, err := ca.SignCSR(t, in.CsrPem)
+		if err != nil {
+			t.Fatalf("nodeward would refuse this CSR: %v", err)
+		}
+		csrKey = csr.PublicKey.(*ecdsa.PublicKey)
+		return &pb.NodeRegistrationResponse{Nid: "n1", CertificatePem: leaf, CaCert: ca.PEM}, nil
+	}}
+	if _, err := registerAndStore(context.Background(), f, &pb.NodeRegistrationRequest{Token: "t"}, p); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.LoadX509KeyPair(p.Cert, p.Key)
+	if err != nil {
+		t.Fatalf("stored pair does not load: %v", err)
+	}
+	if !pair.PrivateKey.(*ecdsa.PrivateKey).PublicKey.Equal(csrKey) {
+		t.Fatal("stored key is not the key the CSR was for")
 	}
 }
 

@@ -221,27 +221,47 @@ func TestRenewRefusesUnusableResponse(t *testing.T) {
 	}
 }
 
+// The fake nodeward runs on its own clock and stamps NotBefore with it, as the
+// real one does. After the skew retry the agent must store the new leaf, since
+// nodeward has already put the old one on its grace revocation.
 func TestRenewRetriesOnceOnClockSkew(t *testing.T) {
-	ca := csrtest.NewCA(t)
-	p := currentCreds(t, ca)
-	sign := csrNodeward(t, ca, p)
-	serverNow := time.Now().Add(20 * time.Minute).Unix()
-	f := &fakeL2{}
-	f.respond = func(in *l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
-		if d := in.Proof.UnixSeconds - serverNow; d > 300 || d < -300 {
-			return nil, status.Error(codes.FailedPrecondition,
-				fmt.Sprintf("mint proof time is outside the 5 minute window; server time %d", serverNow))
-		}
-		return sign(in)
-	}
-	if _, err := renewOnce(t, f, p); err != nil {
-		t.Fatal(err)
-	}
-	if len(f.calls) != 2 {
-		t.Fatalf("calls = %d, want 2", len(f.calls))
-	}
-	if f.calls[0].CsrPem != f.calls[1].CsrPem {
-		t.Error("retry changed the CSR")
+	for _, ahead := range []time.Duration{12 * time.Minute, 20 * time.Minute} {
+		t.Run(ahead.String(), func(t *testing.T) {
+			ca := csrtest.NewCA(t)
+			p := currentCreds(t, ca)
+			serverClock := func() time.Time { return time.Now().Add(ahead) }
+			ca.ServerNow = serverClock
+			sign := csrNodeward(t, ca, p)
+			f := &fakeL2{}
+			f.respond = func(in *l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
+				serverNow := serverClock().Unix()
+				if d := in.Proof.UnixSeconds - serverNow; d > 300 || d < -300 {
+					return nil, status.Error(codes.FailedPrecondition,
+						fmt.Sprintf("mint proof time is outside the 5 minute window; server time %d", serverNow))
+				}
+				return sign(in)
+			}
+			if _, err := renewOnce(t, f, p); err != nil {
+				t.Fatal(err)
+			}
+			if len(f.calls) != 2 {
+				t.Fatalf("calls = %d, want 2", len(f.calls))
+			}
+			if f.calls[0].CsrPem != f.calls[1].CsrPem {
+				t.Error("retry changed the CSR")
+			}
+			pair, err := tls.LoadX509KeyPair(p.Cert, p.Key)
+			if err != nil {
+				t.Fatalf("stored pair does not load: %v", err)
+			}
+			if _, ok := pair.PrivateKey.(*ecdsa.PrivateKey); !ok {
+				t.Fatalf("stored key is %T, want the agent's own ECDSA key", pair.PrivateKey)
+			}
+			leaf, _ := x509.ParseCertificate(pair.Certificate[0])
+			if !leaf.NotBefore.After(time.Now().Add(ahead - time.Minute)) {
+				t.Fatalf("leaf NotBefore %v is not on the server clock", leaf.NotBefore)
+			}
+		})
 	}
 }
 

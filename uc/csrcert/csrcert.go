@@ -42,9 +42,6 @@ const (
 	nonceLen = 32
 	// skewPrefix starts nodeward's clock-skew refusal text.
 	skewPrefix = "mint proof time is outside the 5 minute window"
-	// notBeforeSkew is how far a new leaf's NotBefore may sit ahead of the
-	// local clock. Nodeward sets NotBefore to its own now.
-	notBeforeSkew = 10 * time.Minute
 )
 
 // Key is a fresh agent key and the CSR for it. Make a new Key per mint call.
@@ -263,11 +260,12 @@ func checkCertificate(k *Key, certPEM, caPEM string, now time.Time) error {
 	if !cert.NotAfter.After(now) {
 		return errors.New("already expired")
 	}
+	// Nodeward stamps NotBefore with its own clock and has already acted (the
+	// token is spent or the old leaf is on its grace), so a future NotBefore
+	// is local clock skew, never a reason to refuse. Verify at max(now,
+	// NotBefore), as the cluster agent does.
 	at := now
 	if cert.NotBefore.After(now) {
-		if cert.NotBefore.Sub(now) > notBeforeSkew {
-			return errors.New("not valid until well in the future")
-		}
 		at = cert.NotBefore
 	}
 	roots := x509.NewCertPool()

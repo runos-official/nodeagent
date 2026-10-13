@@ -220,6 +220,20 @@ func TestResolveToleratesNotBeforeSkew(t *testing.T) {
 	}
 }
 
+// Nodeward has already acted when the answer arrives (the token is spent or
+// the old leaf is on its grace), so local clock skew must never refuse a
+// correctly signed certificate for our key.
+func TestResolveAcceptsNotBeforeFarAhead(t *testing.T) {
+	for _, ahead := range []time.Duration{12 * time.Minute, 15 * time.Minute, 2 * time.Hour} {
+		ca := newTestCA(t)
+		k, _ := NewKey()
+		certPEM := ca.sign(t, k.Public(), leafOpts{notBefore: time.Now().Add(ahead)})
+		if _, err := Resolve(k, Response{CertificatePEM: certPEM, CACertPEM: ca.pem}, time.Now()); err != nil {
+			t.Fatalf("NotBefore %v ahead refused: %v", ahead, err)
+		}
+	}
+}
+
 func TestResolveCertificateWinsOverLegacyFields(t *testing.T) {
 	ca := newTestCA(t)
 	k, _ := NewKey()
@@ -255,7 +269,6 @@ func TestResolveRefusesBadResponses(t *testing.T) {
 		"two certificates":    {CertificatePEM: good + good, CACertPEM: ca.pem},
 		"not a PEM":           {CertificatePEM: "garbage", CACertPEM: ca.pem},
 		"wrong PEM type":      {CertificatePEM: strings.Replace(good, "CERTIFICATE", "SOMETHING", 2), CACertPEM: ca.pem},
-		"far future validity": {CertificatePEM: ca.sign(t, k.Public(), leafOpts{notBefore: time.Now().Add(2 * time.Hour)}), CACertPEM: ca.pem},
 	}
 	for name, resp := range cases {
 		t.Run(name, func(t *testing.T) {

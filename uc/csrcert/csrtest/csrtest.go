@@ -20,6 +20,9 @@ type CA struct {
 	Key  *rsa.PrivateKey
 	Cert *x509.Certificate
 	PEM  string
+	// ServerNow, when set, is the fake nodeward clock. Leaves then get
+	// NotBefore = ServerNow(), as nodeward stamps them.
+	ServerNow func() time.Time
 }
 
 // NewCA makes a fresh test CA.
@@ -49,11 +52,15 @@ func NewCA(t testing.TB) *CA {
 // Leaf signs a leaf shaped like nodeward's for pub.
 func (ca *CA) Leaf(t testing.TB, pub crypto.PublicKey) string {
 	t.Helper()
+	notBefore := time.Now().Add(-time.Minute)
+	if ca.ServerNow != nil {
+		notBefore = ca.ServerNow()
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
 		Subject:               pkix.Name{CommonName: "RunOS L2Sec"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(24 * time.Hour),
+		NotBefore:             notBefore,
+		NotAfter:              notBefore.Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
