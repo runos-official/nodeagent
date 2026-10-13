@@ -46,10 +46,12 @@ type upgradeNodeK8sLog struct {
 // drained / cordoned the node as appropriate — this handler only executes the
 // local upgrade work.
 func HandleUpgradeNodeK8s(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent, error) {
+	return handleUpgradeNodeK8s(instruction, NewProgressTagger(instruction))
+}
+
+func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger) (*pb.FromNodeAgent, error) {
 	roslog.I("Executing HandleUpgradeNodeK8s")
 	tag := instruction.Tag
-	// Log lines carry "<tag>/<n>" only when the payload asks (FPL315).
-	progress := NewProgressTagger(instruction)
 
 	jsonData, err := base64.StdEncoding.DecodeString(instruction.JsonB64)
 	if err != nil {

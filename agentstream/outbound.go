@@ -64,6 +64,21 @@ func SendToNodeward(msg *l2sec.FromNodeAgent) error {
 	return nil
 }
 
+// sendOnStream binds an instruction response to the connection that delivered the instruction.
+func sendOnStream(ctx context.Context, stream l2sec.Nodeward_NodeAgentStreamClient, msg *l2sec.FromNodeAgent) error {
+	controlWaiting.Add(1)
+	streamMutex.Lock()
+	controlWaiting.Add(-1)
+	defer streamMutex.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if msg.Tag == "" {
+		msg.Tag = uuid.New().String()
+	}
+	return stream.Send(msg)
+}
+
 // SendBulkToNodeward sends session data (goal 31), yielding to control traffic first.
 //
 // Same stream, same mutex, same error contract. The only difference is that it waits while the

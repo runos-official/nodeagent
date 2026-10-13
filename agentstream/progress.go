@@ -31,6 +31,7 @@ type ProgressTagger struct {
 	mu   sync.Mutex // held across the send, so wire order matches n
 	base string
 	n    uint64
+	send func(*l2sec.FromNodeAgent) error
 }
 
 // NewProgressTagger returns a tagger for instruction, or nil when its payload
@@ -62,7 +63,12 @@ func (p *ProgressTagger) Send(msg *l2sec.FromNodeAgent) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.n++
-	msg.Tag = p.base + "/" + strconv.FormatUint(p.n, 10)
+	if p.base != "" {
+		p.n++
+		msg.Tag = p.base + "/" + strconv.FormatUint(p.n, 10)
+	}
+	if p.send != nil {
+		return p.send(msg)
+	}
 	return SendToNodeward(msg)
 }

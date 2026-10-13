@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
-	"sync"
 
 	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
@@ -14,14 +13,23 @@ import (
 // Number of worker goroutines to spawn
 const numWorkers = 5
 
+// Reconnects share the limit while instructions from an expired stream finish.
+var instructionSlots = make(chan struct{}, numWorkers)
+
 // instructionTask represents a task to process an instruction
 type instructionTask struct {
 	Instruction *l2sec.ToNodeAgent
 }
 
 // StartInstructionStreamHandler initializes the stream handler that processes instructions from Nodeward
-// Returns a channel that will be closed when the stream handler is done
+// The returned channel closes after reception stops. Active instructions can finish after it closes.
 func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_NodeAgentStreamClient) <-chan struct{} {
+	return startInstructionStreamHandler(ctx, stream, handleInstructionWithSend)
+}
+
+func startInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_NodeAgentStreamClient, handle func(*l2sec.ToNodeAgent, func(*l2sec.FromNodeAgent) error) *l2sec.FromNodeAgent) <-chan struct{} {
+	ctx, cancel := context.WithCancel(ctx)
+	send := func(msg *l2sec.FromNodeAgent) error { return sendOnStream(ctx, stream, msg) }
 	done := make(chan struct{})
 
 	// Set the global stream for outbound messages
@@ -30,32 +38,21 @@ func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 	// Create channel for instructions
 	instructionChan := make(chan instructionTask, 20) // Buffer for incoming instructions
 
-	// Create a WaitGroup to track all worker goroutines
-	var wg sync.WaitGroup
-
-	// Start worker goroutines to process instructions
 	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			processInstructions(ctx, workerID, instructionChan)
-		}(i)
+		go processInstructions(ctx, i, instructionChan, func(in *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
+			return handle(in, send)
+		}, send)
 	}
 
 	// Start the receiving goroutine
 	go func() {
 		defer close(done)
 
-		// Make sure all workers finish when we're done
 		defer func() {
-			roslog.I("Stream receiver shutting down, closing instruction channel and waiting for workers")
-			// A session is only meaningful while the stream carrying it is up. Left open across a
-			// reconnect it would strand a shell on this node with nobody reading it, and the far
-			// side would wait for output that can no longer be delivered.
+			// Stop queued work immediately. Active operations finish without blocking reconnect.
+			// Do not close the queue: dispatch goroutines can still select a send during cancellation.
+			cancel()
 			CloseAllSessions("the node's connection to RunOS went down")
-			close(instructionChan)
-			wg.Wait()
-			roslog.I("All workers finished, stream handler done")
 		}()
 
 		// Create a channel to receive instructions asynchronously.
@@ -137,16 +134,8 @@ func StartInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 	return done
 }
 
-// processInstructions handles instructions from the instruction channel
-// It does NOT take a mutex or the stream: every response goes out through SendToNodeward, which
-// takes the package-level streamMutex in outbound.go. A local mutex used to be created here and
-// threaded through, and it was never used by anything, so it read as the lock guarding the send
-// path while the real one sat elsewhere.
-func processInstructions(
-	ctx context.Context,
-	workerID int,
-	instructionChan <-chan instructionTask,
-) {
+// processInstructions runs queued instructions and sends replies through the originating stream.
+func processInstructions(ctx context.Context, workerID int, instructionChan <-chan instructionTask, handle func(*l2sec.ToNodeAgent) *l2sec.FromNodeAgent, send func(*l2sec.FromNodeAgent) error) {
 	roslog.I("Worker started", "worker_id", workerID)
 
 	for {
@@ -161,6 +150,16 @@ func processInstructions(
 				return
 			}
 
+			select {
+			case instructionSlots <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			if ctx.Err() != nil {
+				<-instructionSlots
+				return
+			}
+
 			// Process the instruction
 			roslog.I("Worker processing instruction", "worker_id", workerID, "tag", task.Instruction.Tag, "type", task.Instruction.Type)
 
@@ -168,7 +167,8 @@ func processInstructions(
 			// wraps handleInstruction in a recover boundary so a panic in any
 			// handler turns into an ERROR response for that instruction instead
 			// of unwinding the worker goroutine (and crashing the process).
-			response := safeHandleInstruction(workerID, task.Instruction)
+			response := safeHandleInstructionWith(workerID, task.Instruction, handle)
+			<-instructionSlots
 
 			// A nil response is an explicit "do not ack" signal (used by
 			// VIP_ASSIGN so Nodeward hands off to the next candidate on its
@@ -183,8 +183,8 @@ func processInstructions(
 			case <-ctx.Done():
 				roslog.I("Context cancelled, abandoning response", "worker_id", workerID, "tag", task.Instruction.Tag)
 			default:
-				// Send using the thread-safe SendToNodeward function
-				if err := SendToNodeward(response); err != nil {
+				// The sender checks cancellation again under the stream mutex.
+				if err := send(response); err != nil {
 					roslog.E("Error sending response", err, "worker_id", workerID, "tag", task.Instruction.Tag)
 				} else {
 					roslog.I("Sent response", "worker_id", workerID, "tag", task.Instruction.Tag)
@@ -236,6 +236,10 @@ func safeHandleInstructionWith(
 
 // handleInstruction processes a single instruction and returns a response
 func handleInstruction(instruction *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
+	return handleInstructionWithSend(instruction, SendToNodeward)
+}
+
+func handleInstructionWithSend(instruction *l2sec.ToNodeAgent, send func(*l2sec.FromNodeAgent) error) *l2sec.FromNodeAgent {
 	var response *l2sec.FromNodeAgent
 	var err error
 
@@ -293,7 +297,12 @@ func handleInstruction(instruction *l2sec.ToNodeAgent) *l2sec.FromNodeAgent {
 		response, err = HandleUninstallHelmChart(instruction)
 
 	case UpgradeNodeK8sRequestType:
-		response, err = HandleUpgradeNodeK8s(instruction)
+		progress := NewProgressTagger(instruction)
+		if progress == nil {
+			progress = &ProgressTagger{}
+		}
+		progress.send = send
+		response, err = handleUpgradeNodeK8s(instruction, progress)
 
 	case RestartServiceRequestType:
 		response, err = HandleRestartService(instruction)
