@@ -10,8 +10,8 @@ import (
 
 	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/config"
-	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/registernode"
 )
 
 const (
@@ -100,8 +100,8 @@ func performAutoRenewal() error {
 
 	// Step 3: Call RegenerateCertificate RPC
 	roslog.I("Requesting new certificate from Nodeward")
-	request := &l2sec.RegenerateCertificateRequest{}
-	response, err := c.RegenerateCertificate(ctx, request)
+	paths := registernode.DefaultCredPaths()
+	response, err := requestCertificate(ctx, c, paths, time.Now)
 	if err != nil {
 		roslog.E("Failed to regenerate certificate", err)
 		cleanupBackup(backupDir)
@@ -110,7 +110,7 @@ func performAutoRenewal() error {
 	roslog.I("New certificate received from Nodeward")
 
 	// Step 4: Write new certificates to disk
-	if err := writeCertificates(response); err != nil {
+	if err := writeCertificates(response, paths); err != nil {
 		roslog.E("Failed to write new certificates", err)
 		// Attempt to restore from backup
 		if restoreErr := restoreCertificates(backupDir); restoreErr != nil {

@@ -2,6 +2,7 @@ package registernode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/runos-official/nodeagent/config"
 	pb "github.com/runos-official/nodeagent/l1sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/csrcert"
 	"github.com/runos-official/nodeagent/uc/hostnet"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -45,29 +47,23 @@ func RegisterNode(token, aid, machineId, server string) error {
 		Os:        commons.GetOSInfo(),
 		HostCidrs: hostCidrs,
 	}
-	r, err := c.Register(ctx, request)
-	if err != nil {
-		return classifyRegisterError(err, aid, server)
-	}
 
 	// Progress lines are diagnostics, not program output: send them to stderr so
 	// stdout stays clean for anything a caller might pipe/capture.
-	fmt.Fprintln(os.Stderr, "Writing CA certificate to file...")
-	if err := StorePublicKey(r.CaCert, config.GetCACertPath()); err != nil {
-		return fmt.Errorf("could not store CA certificate (is /etc/runos writable? run as root): %w", err)
+	fmt.Fprintln(os.Stderr, "Requesting certificate and writing credentials to file...")
+	nid, err := registerAndStore(ctx, c, request, DefaultCredPaths())
+	if err != nil {
+		var rpc *rpcError
+		if errors.As(err, &rpc) {
+			return classifyRegisterError(rpc.err, aid, server)
+		}
+		if errors.Is(err, csrcert.ErrUnusableResponse) {
+			return fmt.Errorf("registration returned credentials this node cannot use (%w). The token is now spent: generate a fresh registration command from the RunOS console and re-run", err)
+		}
+		return fmt.Errorf("could not store registration credentials (is /etc/runos writable? run as root): %w", err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Writing public certificate to file...")
-	if err := StorePublicKey(r.PublicKey, config.GetPublicKeyPath()); err != nil {
-		return fmt.Errorf("could not store public certificate (is /etc/runos writable? run as root): %w", err)
-	}
-
-	fmt.Fprintln(os.Stderr, "Writing private certificate to file...")
-	if err := StorePrivateKey(r.PrivateKey, config.GetPrivateKeyPath()); err != nil {
-		return fmt.Errorf("could not store private certificate (is /etc/runos writable? run as root): %w", err)
-	}
-
-	if err := config.UpdateConfig(aid, r.Nid); err != nil {
+	if err := config.UpdateConfig(aid, nid); err != nil {
 		return fmt.Errorf("could not persist registration to /etc/runos/config.yaml (is it writable? run as root): %w", err)
 	}
 
@@ -75,6 +71,39 @@ func RegisterNode(token, aid, machineId, server string) error {
 		roslog.I("Could not add nodelog", err)
 	}
 	return nil
+}
+
+// rpcError marks a failed Register call, so the caller can map its status.
+type rpcError struct{ err error }
+
+func (e *rpcError) Error() string { return e.err.Error() }
+func (e *rpcError) Unwrap() error { return e.err }
+
+// registerAndStore makes a fresh key, sends its CSR with the registration
+// (FPL315), and stores what nodeward returns. The private key stays here. An
+// old nodeward ignores the CSR and returns a key, which is stored as before.
+// It returns the node id.
+func registerAndStore(ctx context.Context, c pb.NodewardClient, req *pb.NodeRegistrationRequest, p CredPaths) (string, error) {
+	key, err := csrcert.NewKey()
+	if err != nil {
+		return "", err
+	}
+	req.CsrPem = key.CSRPEM()
+	r, err := c.Register(ctx, req)
+	if err != nil {
+		return "", &rpcError{err: err}
+	}
+	outcome, err := StoreCredentials(key, csrcert.Response{
+		CertificatePEM: r.CertificatePem,
+		CACertPEM:      r.CaCert,
+		PrivateKey:     r.PrivateKey,
+		PublicKey:      r.PublicKey,
+	}, p)
+	if err != nil {
+		return "", err
+	}
+	roslog.I("Registration credentials stored", "path", outcome.String())
+	return r.Nid, nil
 }
 
 // classifyRegisterError maps a gRPC registration failure to an actionable

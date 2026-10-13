@@ -856,15 +856,80 @@ func (x *ToServerAgent) GetTag() string {
 	return ""
 }
 
-type GetClusterAgentCredentialsRequest struct {
+// Proof that the caller holds the private key of the leaf it presents
+// (FPL315). Sent with every csrPem on an L2SEC minting method.
+type MintProof struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	UnixSeconds   int64                  `protobuf:"varint,1,opt,name=unixSeconds,proto3" json:"unixSeconds,omitempty"` // agent clock, seconds since the epoch
+	Nonce         []byte                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`              // exactly 32 random bytes, new per call
+	Signature     []byte                 `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`      // over the runos-mint-proof-v1 signing input
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MintProof) Reset() {
+	*x = MintProof{}
+	mi := &file_nodeward_l2sec_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MintProof) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MintProof) ProtoMessage() {}
+
+func (x *MintProof) ProtoReflect() protoreflect.Message {
+	mi := &file_nodeward_l2sec_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MintProof.ProtoReflect.Descriptor instead.
+func (*MintProof) Descriptor() ([]byte, []int) {
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *MintProof) GetUnixSeconds() int64 {
+	if x != nil {
+		return x.UnixSeconds
+	}
+	return 0
+}
+
+func (x *MintProof) GetNonce() []byte {
+	if x != nil {
+		return x.Nonce
+	}
+	return nil
+}
+
+func (x *MintProof) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
+type GetClusterAgentCredentialsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// OPTIONAL (FPL315). PEM CSR for an ECDSA P-256 key. Absent: legacy path.
+	CsrPem        string     `protobuf:"bytes,5,opt,name=csrPem,proto3" json:"csrPem,omitempty"`
+	Proof         *MintProof `protobuf:"bytes,10,opt,name=proof,proto3" json:"proof,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetClusterAgentCredentialsRequest) Reset() {
 	*x = GetClusterAgentCredentialsRequest{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[16]
+	mi := &file_nodeward_l2sec_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -876,7 +941,7 @@ func (x *GetClusterAgentCredentialsRequest) String() string {
 func (*GetClusterAgentCredentialsRequest) ProtoMessage() {}
 
 func (x *GetClusterAgentCredentialsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[16]
+	mi := &file_nodeward_l2sec_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -889,21 +954,37 @@ func (x *GetClusterAgentCredentialsRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetClusterAgentCredentialsRequest.ProtoReflect.Descriptor instead.
 func (*GetClusterAgentCredentialsRequest) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{16}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetClusterAgentCredentialsRequest) GetCsrPem() string {
+	if x != nil {
+		return x.CsrPem
+	}
+	return ""
+}
+
+func (x *GetClusterAgentCredentialsRequest) GetProof() *MintProof {
+	if x != nil {
+		return x.Proof
+	}
+	return nil
 }
 
 type GetClusterAgentCredentialsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PrivateKey    string                 `protobuf:"bytes,60,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
-	PublicKey     string                 `protobuf:"bytes,65,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
-	CaCert        string                 `protobuf:"bytes,70,opt,name=caCert,proto3" json:"caCert,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PrivateKey string                 `protobuf:"bytes,60,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
+	PublicKey  string                 `protobuf:"bytes,65,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
+	CaCert     string                 `protobuf:"bytes,70,opt,name=caCert,proto3" json:"caCert,omitempty"`
+	// Set only when the request carried csrPem. Then no key is returned.
+	CertificatePem string `protobuf:"bytes,75,opt,name=certificatePem,proto3" json:"certificatePem,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetClusterAgentCredentialsResponse) Reset() {
 	*x = GetClusterAgentCredentialsResponse{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[17]
+	mi := &file_nodeward_l2sec_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -915,7 +996,7 @@ func (x *GetClusterAgentCredentialsResponse) String() string {
 func (*GetClusterAgentCredentialsResponse) ProtoMessage() {}
 
 func (x *GetClusterAgentCredentialsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[17]
+	mi := &file_nodeward_l2sec_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -928,7 +1009,7 @@ func (x *GetClusterAgentCredentialsResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use GetClusterAgentCredentialsResponse.ProtoReflect.Descriptor instead.
 func (*GetClusterAgentCredentialsResponse) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{17}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *GetClusterAgentCredentialsResponse) GetPrivateKey() string {
@@ -952,6 +1033,13 @@ func (x *GetClusterAgentCredentialsResponse) GetCaCert() string {
 	return ""
 }
 
+func (x *GetClusterAgentCredentialsResponse) GetCertificatePem() string {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return ""
+}
+
 type UpdateStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        string                 `protobuf:"bytes,5,opt,name=status,proto3" json:"status,omitempty"`
@@ -961,7 +1049,7 @@ type UpdateStatusRequest struct {
 
 func (x *UpdateStatusRequest) Reset() {
 	*x = UpdateStatusRequest{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[18]
+	mi := &file_nodeward_l2sec_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -973,7 +1061,7 @@ func (x *UpdateStatusRequest) String() string {
 func (*UpdateStatusRequest) ProtoMessage() {}
 
 func (x *UpdateStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[18]
+	mi := &file_nodeward_l2sec_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,7 +1074,7 @@ func (x *UpdateStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateStatusRequest.ProtoReflect.Descriptor instead.
 func (*UpdateStatusRequest) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{18}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *UpdateStatusRequest) GetStatus() string {
@@ -1004,7 +1092,7 @@ type UpdateStatusResponse struct {
 
 func (x *UpdateStatusResponse) Reset() {
 	*x = UpdateStatusResponse{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[19]
+	mi := &file_nodeward_l2sec_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1016,7 +1104,7 @@ func (x *UpdateStatusResponse) String() string {
 func (*UpdateStatusResponse) ProtoMessage() {}
 
 func (x *UpdateStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[19]
+	mi := &file_nodeward_l2sec_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1029,7 +1117,7 @@ func (x *UpdateStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateStatusResponse.ProtoReflect.Descriptor instead.
 func (*UpdateStatusResponse) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{19}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{20}
 }
 
 type AddNodelogRequest struct {
@@ -1047,7 +1135,7 @@ type AddNodelogRequest struct {
 
 func (x *AddNodelogRequest) Reset() {
 	*x = AddNodelogRequest{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[20]
+	mi := &file_nodeward_l2sec_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1059,7 +1147,7 @@ func (x *AddNodelogRequest) String() string {
 func (*AddNodelogRequest) ProtoMessage() {}
 
 func (x *AddNodelogRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[20]
+	mi := &file_nodeward_l2sec_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1072,7 +1160,7 @@ func (x *AddNodelogRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNodelogRequest.ProtoReflect.Descriptor instead.
 func (*AddNodelogRequest) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{20}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AddNodelogRequest) GetType() string {
@@ -1132,7 +1220,7 @@ type AddNodelogResponse struct {
 
 func (x *AddNodelogResponse) Reset() {
 	*x = AddNodelogResponse{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[21]
+	mi := &file_nodeward_l2sec_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1144,7 +1232,7 @@ func (x *AddNodelogResponse) String() string {
 func (*AddNodelogResponse) ProtoMessage() {}
 
 func (x *AddNodelogResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[21]
+	mi := &file_nodeward_l2sec_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1157,7 +1245,7 @@ func (x *AddNodelogResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNodelogResponse.ProtoReflect.Descriptor instead.
 func (*AddNodelogResponse) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{21}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{22}
 }
 
 type GetControlPlaneNodesRequest struct {
@@ -1168,7 +1256,7 @@ type GetControlPlaneNodesRequest struct {
 
 func (x *GetControlPlaneNodesRequest) Reset() {
 	*x = GetControlPlaneNodesRequest{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[22]
+	mi := &file_nodeward_l2sec_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1180,7 +1268,7 @@ func (x *GetControlPlaneNodesRequest) String() string {
 func (*GetControlPlaneNodesRequest) ProtoMessage() {}
 
 func (x *GetControlPlaneNodesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[22]
+	mi := &file_nodeward_l2sec_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1193,7 +1281,7 @@ func (x *GetControlPlaneNodesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetControlPlaneNodesRequest.ProtoReflect.Descriptor instead.
 func (*GetControlPlaneNodesRequest) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{22}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{23}
 }
 
 type GetControlPlaneNodesResponse struct {
@@ -1205,7 +1293,7 @@ type GetControlPlaneNodesResponse struct {
 
 func (x *GetControlPlaneNodesResponse) Reset() {
 	*x = GetControlPlaneNodesResponse{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[23]
+	mi := &file_nodeward_l2sec_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1217,7 +1305,7 @@ func (x *GetControlPlaneNodesResponse) String() string {
 func (*GetControlPlaneNodesResponse) ProtoMessage() {}
 
 func (x *GetControlPlaneNodesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[23]
+	mi := &file_nodeward_l2sec_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1230,7 +1318,7 @@ func (x *GetControlPlaneNodesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetControlPlaneNodesResponse.ProtoReflect.Descriptor instead.
 func (*GetControlPlaneNodesResponse) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{23}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *GetControlPlaneNodesResponse) GetControlPlaneNodes() []*GetControlPlaneNodesResponse_ControlPlaneNode {
@@ -1251,7 +1339,7 @@ type UpdateNodeInstallationStatusRequest struct {
 
 func (x *UpdateNodeInstallationStatusRequest) Reset() {
 	*x = UpdateNodeInstallationStatusRequest{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[24]
+	mi := &file_nodeward_l2sec_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1263,7 +1351,7 @@ func (x *UpdateNodeInstallationStatusRequest) String() string {
 func (*UpdateNodeInstallationStatusRequest) ProtoMessage() {}
 
 func (x *UpdateNodeInstallationStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[24]
+	mi := &file_nodeward_l2sec_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1276,7 +1364,7 @@ func (x *UpdateNodeInstallationStatusRequest) ProtoReflect() protoreflect.Messag
 
 // Deprecated: Use UpdateNodeInstallationStatusRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNodeInstallationStatusRequest) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{24}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *UpdateNodeInstallationStatusRequest) GetStepCompleted() int32 {
@@ -1308,7 +1396,7 @@ type UpdateNodeInstallationStatusResponse struct {
 
 func (x *UpdateNodeInstallationStatusResponse) Reset() {
 	*x = UpdateNodeInstallationStatusResponse{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[25]
+	mi := &file_nodeward_l2sec_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1320,7 +1408,7 @@ func (x *UpdateNodeInstallationStatusResponse) String() string {
 func (*UpdateNodeInstallationStatusResponse) ProtoMessage() {}
 
 func (x *UpdateNodeInstallationStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[25]
+	mi := &file_nodeward_l2sec_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1333,18 +1421,21 @@ func (x *UpdateNodeInstallationStatusResponse) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use UpdateNodeInstallationStatusResponse.ProtoReflect.Descriptor instead.
 func (*UpdateNodeInstallationStatusResponse) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{25}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{26}
 }
 
 type RegenerateCertificateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// OPTIONAL (FPL315). PEM CSR for an ECDSA P-256 key. Absent: legacy path.
+	CsrPem        string     `protobuf:"bytes,5,opt,name=csrPem,proto3" json:"csrPem,omitempty"`
+	Proof         *MintProof `protobuf:"bytes,10,opt,name=proof,proto3" json:"proof,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegenerateCertificateRequest) Reset() {
 	*x = RegenerateCertificateRequest{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[26]
+	mi := &file_nodeward_l2sec_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1356,7 +1447,7 @@ func (x *RegenerateCertificateRequest) String() string {
 func (*RegenerateCertificateRequest) ProtoMessage() {}
 
 func (x *RegenerateCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[26]
+	mi := &file_nodeward_l2sec_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1369,21 +1460,37 @@ func (x *RegenerateCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegenerateCertificateRequest.ProtoReflect.Descriptor instead.
 func (*RegenerateCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{26}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *RegenerateCertificateRequest) GetCsrPem() string {
+	if x != nil {
+		return x.CsrPem
+	}
+	return ""
+}
+
+func (x *RegenerateCertificateRequest) GetProof() *MintProof {
+	if x != nil {
+		return x.Proof
+	}
+	return nil
 }
 
 type RegenerateCertificateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PrivateKey    string                 `protobuf:"bytes,5,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
-	PublicKey     string                 `protobuf:"bytes,10,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
-	CaCert        string                 `protobuf:"bytes,15,opt,name=caCert,proto3" json:"caCert,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	PrivateKey string                 `protobuf:"bytes,5,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
+	PublicKey  string                 `protobuf:"bytes,10,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
+	CaCert     string                 `protobuf:"bytes,15,opt,name=caCert,proto3" json:"caCert,omitempty"`
+	// Set only when the request carried csrPem. Then no key is returned.
+	CertificatePem string `protobuf:"bytes,20,opt,name=certificatePem,proto3" json:"certificatePem,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RegenerateCertificateResponse) Reset() {
 	*x = RegenerateCertificateResponse{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[27]
+	mi := &file_nodeward_l2sec_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1395,7 +1502,7 @@ func (x *RegenerateCertificateResponse) String() string {
 func (*RegenerateCertificateResponse) ProtoMessage() {}
 
 func (x *RegenerateCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[27]
+	mi := &file_nodeward_l2sec_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1408,7 +1515,7 @@ func (x *RegenerateCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegenerateCertificateResponse.ProtoReflect.Descriptor instead.
 func (*RegenerateCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{27}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RegenerateCertificateResponse) GetPrivateKey() string {
@@ -1432,6 +1539,13 @@ func (x *RegenerateCertificateResponse) GetCaCert() string {
 	return ""
 }
 
+func (x *RegenerateCertificateResponse) GetCertificatePem() string {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return ""
+}
+
 type InstallCommandList_InstallCommand struct {
 	state                            protoimpl.MessageState `protogen:"open.v1"`
 	CommandId                        int32                  `protobuf:"varint,5,opt,name=commandId,proto3" json:"commandId,omitempty"`
@@ -1446,7 +1560,7 @@ type InstallCommandList_InstallCommand struct {
 
 func (x *InstallCommandList_InstallCommand) Reset() {
 	*x = InstallCommandList_InstallCommand{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[28]
+	mi := &file_nodeward_l2sec_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +1572,7 @@ func (x *InstallCommandList_InstallCommand) String() string {
 func (*InstallCommandList_InstallCommand) ProtoMessage() {}
 
 func (x *InstallCommandList_InstallCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[28]
+	mi := &file_nodeward_l2sec_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1526,7 +1640,7 @@ type GetControlPlaneNodesResponse_ControlPlaneNode struct {
 
 func (x *GetControlPlaneNodesResponse_ControlPlaneNode) Reset() {
 	*x = GetControlPlaneNodesResponse_ControlPlaneNode{}
-	mi := &file_nodeward_l2sec_proto_msgTypes[29]
+	mi := &file_nodeward_l2sec_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1538,7 +1652,7 @@ func (x *GetControlPlaneNodesResponse_ControlPlaneNode) String() string {
 func (*GetControlPlaneNodesResponse_ControlPlaneNode) ProtoMessage() {}
 
 func (x *GetControlPlaneNodesResponse_ControlPlaneNode) ProtoReflect() protoreflect.Message {
-	mi := &file_nodeward_l2sec_proto_msgTypes[29]
+	mi := &file_nodeward_l2sec_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1551,7 +1665,7 @@ func (x *GetControlPlaneNodesResponse_ControlPlaneNode) ProtoReflect() protorefl
 
 // Deprecated: Use GetControlPlaneNodesResponse_ControlPlaneNode.ProtoReflect.Descriptor instead.
 func (*GetControlPlaneNodesResponse_ControlPlaneNode) Descriptor() ([]byte, []int) {
-	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{23, 0}
+	return file_nodeward_l2sec_proto_rawDescGZIP(), []int{24, 0}
 }
 
 func (x *GetControlPlaneNodesResponse_ControlPlaneNode) GetVpnIp() string {
@@ -1638,14 +1752,22 @@ const file_nodeward_l2sec_proto_rawDesc = "" +
 	"\ajsonB64\x18\x01 \x01(\tR\ajsonB64\x12\x12\n" +
 	"\x04type\x18\x05 \x01(\tR\x04type\x12\x10\n" +
 	"\x03tag\x18\n" +
-	" \x01(\tR\x03tag\"#\n" +
-	"!GetClusterAgentCredentialsRequest\"z\n" +
+	" \x01(\tR\x03tag\"a\n" +
+	"\tMintProof\x12 \n" +
+	"\vunixSeconds\x18\x01 \x01(\x03R\vunixSeconds\x12\x14\n" +
+	"\x05nonce\x18\x02 \x01(\fR\x05nonce\x12\x1c\n" +
+	"\tsignature\x18\x03 \x01(\fR\tsignature\"x\n" +
+	"!GetClusterAgentCredentialsRequest\x12\x16\n" +
+	"\x06csrPem\x18\x05 \x01(\tR\x06csrPem\x12;\n" +
+	"\x05proof\x18\n" +
+	" \x01(\v2%.runos.nodeward.proto.l2sec.MintProofR\x05proof\"\xa2\x01\n" +
 	"\"GetClusterAgentCredentialsResponse\x12\x1e\n" +
 	"\n" +
 	"privateKey\x18< \x01(\tR\n" +
 	"privateKey\x12\x1c\n" +
 	"\tpublicKey\x18A \x01(\tR\tpublicKey\x12\x16\n" +
-	"\x06caCert\x18F \x01(\tR\x06caCert\"-\n" +
+	"\x06caCert\x18F \x01(\tR\x06caCert\x12&\n" +
+	"\x0ecertificatePem\x18K \x01(\tR\x0ecertificatePem\"-\n" +
 	"\x13UpdateStatusRequest\x12\x16\n" +
 	"\x06status\x18\x05 \x01(\tR\x06status\"\x16\n" +
 	"\x14UpdateStatusResponse\"\xba\x01\n" +
@@ -1670,15 +1792,19 @@ const file_nodeward_l2sec_proto_rawDesc = "" +
 	" \x01(\x05R\rstepCompleted\x12 \n" +
 	"\verrorAtStep\x18\x0f \x01(\x05R\verrorAtStep\x12\"\n" +
 	"\ferrorMessage\x18\x14 \x01(\tR\ferrorMessage\"&\n" +
-	"$UpdateNodeInstallationStatusResponse\"\x1e\n" +
-	"\x1cRegenerateCertificateRequest\"u\n" +
+	"$UpdateNodeInstallationStatusResponse\"s\n" +
+	"\x1cRegenerateCertificateRequest\x12\x16\n" +
+	"\x06csrPem\x18\x05 \x01(\tR\x06csrPem\x12;\n" +
+	"\x05proof\x18\n" +
+	" \x01(\v2%.runos.nodeward.proto.l2sec.MintProofR\x05proof\"\x9d\x01\n" +
 	"\x1dRegenerateCertificateResponse\x12\x1e\n" +
 	"\n" +
 	"privateKey\x18\x05 \x01(\tR\n" +
 	"privateKey\x12\x1c\n" +
 	"\tpublicKey\x18\n" +
 	" \x01(\tR\tpublicKey\x12\x16\n" +
-	"\x06caCert\x18\x0f \x01(\tR\x06caCert2\xfa\r\n" +
+	"\x06caCert\x18\x0f \x01(\tR\x06caCert\x12&\n" +
+	"\x0ecertificatePem\x18\x14 \x01(\tR\x0ecertificatePem2\xfa\r\n" +
 	"\bNodeward\x12\x81\x01\n" +
 	"\x15GetInstallVpnCommands\x128.runos.nodeward.proto.l2sec.GetInstallVpnCommandsRequest\x1a..runos.nodeward.proto.l2sec.InstallCommandList\x12{\n" +
 	"\x12GetInstallCommands\x125.runos.nodeward.proto.l2sec.GetInstallCommandsRequest\x1a..runos.nodeward.proto.l2sec.InstallCommandList\x12k\n" +
@@ -1709,7 +1835,7 @@ func file_nodeward_l2sec_proto_rawDescGZIP() []byte {
 	return file_nodeward_l2sec_proto_rawDescData
 }
 
-var file_nodeward_l2sec_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_nodeward_l2sec_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_nodeward_l2sec_proto_goTypes = []any{
 	(*GetInstallVpnCommandsRequest)(nil),                  // 0: runos.nodeward.proto.l2sec.GetInstallVpnCommandsRequest
 	(*GetInstallCommandsRequest)(nil),                     // 1: runos.nodeward.proto.l2sec.GetInstallCommandsRequest
@@ -1727,59 +1853,62 @@ var file_nodeward_l2sec_proto_goTypes = []any{
 	(*ToNodeAgent)(nil),                                   // 13: runos.nodeward.proto.l2sec.ToNodeAgent
 	(*FromServerAgent)(nil),                               // 14: runos.nodeward.proto.l2sec.FromServerAgent
 	(*ToServerAgent)(nil),                                 // 15: runos.nodeward.proto.l2sec.ToServerAgent
-	(*GetClusterAgentCredentialsRequest)(nil),             // 16: runos.nodeward.proto.l2sec.GetClusterAgentCredentialsRequest
-	(*GetClusterAgentCredentialsResponse)(nil),            // 17: runos.nodeward.proto.l2sec.GetClusterAgentCredentialsResponse
-	(*UpdateStatusRequest)(nil),                           // 18: runos.nodeward.proto.l2sec.UpdateStatusRequest
-	(*UpdateStatusResponse)(nil),                          // 19: runos.nodeward.proto.l2sec.UpdateStatusResponse
-	(*AddNodelogRequest)(nil),                             // 20: runos.nodeward.proto.l2sec.AddNodelogRequest
-	(*AddNodelogResponse)(nil),                            // 21: runos.nodeward.proto.l2sec.AddNodelogResponse
-	(*GetControlPlaneNodesRequest)(nil),                   // 22: runos.nodeward.proto.l2sec.GetControlPlaneNodesRequest
-	(*GetControlPlaneNodesResponse)(nil),                  // 23: runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse
-	(*UpdateNodeInstallationStatusRequest)(nil),           // 24: runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusRequest
-	(*UpdateNodeInstallationStatusResponse)(nil),          // 25: runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusResponse
-	(*RegenerateCertificateRequest)(nil),                  // 26: runos.nodeward.proto.l2sec.RegenerateCertificateRequest
-	(*RegenerateCertificateResponse)(nil),                 // 27: runos.nodeward.proto.l2sec.RegenerateCertificateResponse
-	(*InstallCommandList_InstallCommand)(nil),             // 28: runos.nodeward.proto.l2sec.InstallCommandList.InstallCommand
-	(*GetControlPlaneNodesResponse_ControlPlaneNode)(nil), // 29: runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse.ControlPlaneNode
+	(*MintProof)(nil),                                     // 16: runos.nodeward.proto.l2sec.MintProof
+	(*GetClusterAgentCredentialsRequest)(nil),             // 17: runos.nodeward.proto.l2sec.GetClusterAgentCredentialsRequest
+	(*GetClusterAgentCredentialsResponse)(nil),            // 18: runos.nodeward.proto.l2sec.GetClusterAgentCredentialsResponse
+	(*UpdateStatusRequest)(nil),                           // 19: runos.nodeward.proto.l2sec.UpdateStatusRequest
+	(*UpdateStatusResponse)(nil),                          // 20: runos.nodeward.proto.l2sec.UpdateStatusResponse
+	(*AddNodelogRequest)(nil),                             // 21: runos.nodeward.proto.l2sec.AddNodelogRequest
+	(*AddNodelogResponse)(nil),                            // 22: runos.nodeward.proto.l2sec.AddNodelogResponse
+	(*GetControlPlaneNodesRequest)(nil),                   // 23: runos.nodeward.proto.l2sec.GetControlPlaneNodesRequest
+	(*GetControlPlaneNodesResponse)(nil),                  // 24: runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse
+	(*UpdateNodeInstallationStatusRequest)(nil),           // 25: runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusRequest
+	(*UpdateNodeInstallationStatusResponse)(nil),          // 26: runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusResponse
+	(*RegenerateCertificateRequest)(nil),                  // 27: runos.nodeward.proto.l2sec.RegenerateCertificateRequest
+	(*RegenerateCertificateResponse)(nil),                 // 28: runos.nodeward.proto.l2sec.RegenerateCertificateResponse
+	(*InstallCommandList_InstallCommand)(nil),             // 29: runos.nodeward.proto.l2sec.InstallCommandList.InstallCommand
+	(*GetControlPlaneNodesResponse_ControlPlaneNode)(nil), // 30: runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse.ControlPlaneNode
 }
 var file_nodeward_l2sec_proto_depIdxs = []int32{
-	28, // 0: runos.nodeward.proto.l2sec.InstallCommandList.commands:type_name -> runos.nodeward.proto.l2sec.InstallCommandList.InstallCommand
+	29, // 0: runos.nodeward.proto.l2sec.InstallCommandList.commands:type_name -> runos.nodeward.proto.l2sec.InstallCommandList.InstallCommand
 	5,  // 1: runos.nodeward.proto.l2sec.ManualSyncRequest.nodePeer:type_name -> runos.nodeward.proto.l2sec.VpnPeer
 	5,  // 2: runos.nodeward.proto.l2sec.ManualSyncResponse.peers:type_name -> runos.nodeward.proto.l2sec.VpnPeer
-	29, // 3: runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse.ControlPlaneNodes:type_name -> runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse.ControlPlaneNode
-	0,  // 4: runos.nodeward.proto.l2sec.Nodeward.GetInstallVpnCommands:input_type -> runos.nodeward.proto.l2sec.GetInstallVpnCommandsRequest
-	1,  // 5: runos.nodeward.proto.l2sec.Nodeward.GetInstallCommands:input_type -> runos.nodeward.proto.l2sec.GetInstallCommandsRequest
-	6,  // 6: runos.nodeward.proto.l2sec.Nodeward.ManualSync:input_type -> runos.nodeward.proto.l2sec.ManualSyncRequest
-	2,  // 7: runos.nodeward.proto.l2sec.Nodeward.GetNodeRegistrationToken:input_type -> runos.nodeward.proto.l2sec.GetNodeRegistrationTokenRequest
-	8,  // 8: runos.nodeward.proto.l2sec.Nodeward.Communicate:input_type -> runos.nodeward.proto.l2sec.FromNode
-	10, // 9: runos.nodeward.proto.l2sec.Nodeward.ClusterAgentStream:input_type -> runos.nodeward.proto.l2sec.FromClusterAgent
-	12, // 10: runos.nodeward.proto.l2sec.Nodeward.NodeAgentStream:input_type -> runos.nodeward.proto.l2sec.FromNodeAgent
-	14, // 11: runos.nodeward.proto.l2sec.Nodeward.ServerAgentStream:input_type -> runos.nodeward.proto.l2sec.FromServerAgent
-	16, // 12: runos.nodeward.proto.l2sec.Nodeward.GetClusterAgentCredentials:input_type -> runos.nodeward.proto.l2sec.GetClusterAgentCredentialsRequest
-	18, // 13: runos.nodeward.proto.l2sec.Nodeward.UpdateStatus:input_type -> runos.nodeward.proto.l2sec.UpdateStatusRequest
-	20, // 14: runos.nodeward.proto.l2sec.Nodeward.AddNodelog:input_type -> runos.nodeward.proto.l2sec.AddNodelogRequest
-	22, // 15: runos.nodeward.proto.l2sec.Nodeward.GetControlPlaneNodes:input_type -> runos.nodeward.proto.l2sec.GetControlPlaneNodesRequest
-	24, // 16: runos.nodeward.proto.l2sec.Nodeward.UpdateNodeInstallationStatus:input_type -> runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusRequest
-	26, // 17: runos.nodeward.proto.l2sec.Nodeward.RegenerateCertificate:input_type -> runos.nodeward.proto.l2sec.RegenerateCertificateRequest
-	4,  // 18: runos.nodeward.proto.l2sec.Nodeward.GetInstallVpnCommands:output_type -> runos.nodeward.proto.l2sec.InstallCommandList
-	4,  // 19: runos.nodeward.proto.l2sec.Nodeward.GetInstallCommands:output_type -> runos.nodeward.proto.l2sec.InstallCommandList
-	7,  // 20: runos.nodeward.proto.l2sec.Nodeward.ManualSync:output_type -> runos.nodeward.proto.l2sec.ManualSyncResponse
-	3,  // 21: runos.nodeward.proto.l2sec.Nodeward.GetNodeRegistrationToken:output_type -> runos.nodeward.proto.l2sec.GetNodeRegistrationTokenResponse
-	9,  // 22: runos.nodeward.proto.l2sec.Nodeward.Communicate:output_type -> runos.nodeward.proto.l2sec.ToNode
-	11, // 23: runos.nodeward.proto.l2sec.Nodeward.ClusterAgentStream:output_type -> runos.nodeward.proto.l2sec.ToClusterAgent
-	13, // 24: runos.nodeward.proto.l2sec.Nodeward.NodeAgentStream:output_type -> runos.nodeward.proto.l2sec.ToNodeAgent
-	15, // 25: runos.nodeward.proto.l2sec.Nodeward.ServerAgentStream:output_type -> runos.nodeward.proto.l2sec.ToServerAgent
-	17, // 26: runos.nodeward.proto.l2sec.Nodeward.GetClusterAgentCredentials:output_type -> runos.nodeward.proto.l2sec.GetClusterAgentCredentialsResponse
-	19, // 27: runos.nodeward.proto.l2sec.Nodeward.UpdateStatus:output_type -> runos.nodeward.proto.l2sec.UpdateStatusResponse
-	21, // 28: runos.nodeward.proto.l2sec.Nodeward.AddNodelog:output_type -> runos.nodeward.proto.l2sec.AddNodelogResponse
-	23, // 29: runos.nodeward.proto.l2sec.Nodeward.GetControlPlaneNodes:output_type -> runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse
-	25, // 30: runos.nodeward.proto.l2sec.Nodeward.UpdateNodeInstallationStatus:output_type -> runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusResponse
-	27, // 31: runos.nodeward.proto.l2sec.Nodeward.RegenerateCertificate:output_type -> runos.nodeward.proto.l2sec.RegenerateCertificateResponse
-	18, // [18:32] is the sub-list for method output_type
-	4,  // [4:18] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	16, // 3: runos.nodeward.proto.l2sec.GetClusterAgentCredentialsRequest.proof:type_name -> runos.nodeward.proto.l2sec.MintProof
+	30, // 4: runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse.ControlPlaneNodes:type_name -> runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse.ControlPlaneNode
+	16, // 5: runos.nodeward.proto.l2sec.RegenerateCertificateRequest.proof:type_name -> runos.nodeward.proto.l2sec.MintProof
+	0,  // 6: runos.nodeward.proto.l2sec.Nodeward.GetInstallVpnCommands:input_type -> runos.nodeward.proto.l2sec.GetInstallVpnCommandsRequest
+	1,  // 7: runos.nodeward.proto.l2sec.Nodeward.GetInstallCommands:input_type -> runos.nodeward.proto.l2sec.GetInstallCommandsRequest
+	6,  // 8: runos.nodeward.proto.l2sec.Nodeward.ManualSync:input_type -> runos.nodeward.proto.l2sec.ManualSyncRequest
+	2,  // 9: runos.nodeward.proto.l2sec.Nodeward.GetNodeRegistrationToken:input_type -> runos.nodeward.proto.l2sec.GetNodeRegistrationTokenRequest
+	8,  // 10: runos.nodeward.proto.l2sec.Nodeward.Communicate:input_type -> runos.nodeward.proto.l2sec.FromNode
+	10, // 11: runos.nodeward.proto.l2sec.Nodeward.ClusterAgentStream:input_type -> runos.nodeward.proto.l2sec.FromClusterAgent
+	12, // 12: runos.nodeward.proto.l2sec.Nodeward.NodeAgentStream:input_type -> runos.nodeward.proto.l2sec.FromNodeAgent
+	14, // 13: runos.nodeward.proto.l2sec.Nodeward.ServerAgentStream:input_type -> runos.nodeward.proto.l2sec.FromServerAgent
+	17, // 14: runos.nodeward.proto.l2sec.Nodeward.GetClusterAgentCredentials:input_type -> runos.nodeward.proto.l2sec.GetClusterAgentCredentialsRequest
+	19, // 15: runos.nodeward.proto.l2sec.Nodeward.UpdateStatus:input_type -> runos.nodeward.proto.l2sec.UpdateStatusRequest
+	21, // 16: runos.nodeward.proto.l2sec.Nodeward.AddNodelog:input_type -> runos.nodeward.proto.l2sec.AddNodelogRequest
+	23, // 17: runos.nodeward.proto.l2sec.Nodeward.GetControlPlaneNodes:input_type -> runos.nodeward.proto.l2sec.GetControlPlaneNodesRequest
+	25, // 18: runos.nodeward.proto.l2sec.Nodeward.UpdateNodeInstallationStatus:input_type -> runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusRequest
+	27, // 19: runos.nodeward.proto.l2sec.Nodeward.RegenerateCertificate:input_type -> runos.nodeward.proto.l2sec.RegenerateCertificateRequest
+	4,  // 20: runos.nodeward.proto.l2sec.Nodeward.GetInstallVpnCommands:output_type -> runos.nodeward.proto.l2sec.InstallCommandList
+	4,  // 21: runos.nodeward.proto.l2sec.Nodeward.GetInstallCommands:output_type -> runos.nodeward.proto.l2sec.InstallCommandList
+	7,  // 22: runos.nodeward.proto.l2sec.Nodeward.ManualSync:output_type -> runos.nodeward.proto.l2sec.ManualSyncResponse
+	3,  // 23: runos.nodeward.proto.l2sec.Nodeward.GetNodeRegistrationToken:output_type -> runos.nodeward.proto.l2sec.GetNodeRegistrationTokenResponse
+	9,  // 24: runos.nodeward.proto.l2sec.Nodeward.Communicate:output_type -> runos.nodeward.proto.l2sec.ToNode
+	11, // 25: runos.nodeward.proto.l2sec.Nodeward.ClusterAgentStream:output_type -> runos.nodeward.proto.l2sec.ToClusterAgent
+	13, // 26: runos.nodeward.proto.l2sec.Nodeward.NodeAgentStream:output_type -> runos.nodeward.proto.l2sec.ToNodeAgent
+	15, // 27: runos.nodeward.proto.l2sec.Nodeward.ServerAgentStream:output_type -> runos.nodeward.proto.l2sec.ToServerAgent
+	18, // 28: runos.nodeward.proto.l2sec.Nodeward.GetClusterAgentCredentials:output_type -> runos.nodeward.proto.l2sec.GetClusterAgentCredentialsResponse
+	20, // 29: runos.nodeward.proto.l2sec.Nodeward.UpdateStatus:output_type -> runos.nodeward.proto.l2sec.UpdateStatusResponse
+	22, // 30: runos.nodeward.proto.l2sec.Nodeward.AddNodelog:output_type -> runos.nodeward.proto.l2sec.AddNodelogResponse
+	24, // 31: runos.nodeward.proto.l2sec.Nodeward.GetControlPlaneNodes:output_type -> runos.nodeward.proto.l2sec.GetControlPlaneNodesResponse
+	26, // 32: runos.nodeward.proto.l2sec.Nodeward.UpdateNodeInstallationStatus:output_type -> runos.nodeward.proto.l2sec.UpdateNodeInstallationStatusResponse
+	28, // 33: runos.nodeward.proto.l2sec.Nodeward.RegenerateCertificate:output_type -> runos.nodeward.proto.l2sec.RegenerateCertificateResponse
+	20, // [20:34] is the sub-list for method output_type
+	6,  // [6:20] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_nodeward_l2sec_proto_init() }
@@ -1793,7 +1922,7 @@ func file_nodeward_l2sec_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nodeward_l2sec_proto_rawDesc), len(file_nodeward_l2sec_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -11,7 +11,6 @@ import (
 
 	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/config"
-	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/registernode"
 )
@@ -101,8 +100,8 @@ func RenewCertificate(jsonOut bool) error {
 	progress("→ Requesting new certificate from Nodeward...\n")
 	roslog.I("Calling RegenerateCertificate RPC")
 
-	request := &l2sec.RegenerateCertificateRequest{}
-	response, err := c.RegenerateCertificate(ctx, request)
+	paths := registernode.DefaultCredPaths()
+	response, err := requestCertificate(ctx, c, paths, time.Now)
 	if err != nil {
 		cleanupBackup(backupDir)
 		return fail("Renew certificate: request new certificate from Nodeward", err.Error(),
@@ -114,7 +113,7 @@ func RenewCertificate(jsonOut bool) error {
 
 	// Step 4: Write new certificates to disk
 	progress("→ Writing new certificates to disk...\n")
-	if err := writeCertificates(response); err != nil {
+	if err := writeCertificates(response, paths); err != nil {
 		remedy := restoreOrAdvise(progress, backupDir)
 		return fail("Renew certificate: write new certificates to disk", err.Error(), remedy)
 	}
@@ -240,27 +239,6 @@ func backupCertificates() (string, error) {
 
 	roslog.I("Certificates backed up", "backup_dir", backupDir)
 	return backupDir, nil
-}
-
-// writeCertificates writes the new certificates to disk
-func writeCertificates(response *l2sec.RegenerateCertificateResponse) error {
-	// Write CA certificate
-	if err := registernode.StorePublicKey(response.CaCert, config.GetCACertPath()); err != nil {
-		return fmt.Errorf("failed to write CA certificate: %w", err)
-	}
-
-	// Write public certificate
-	if err := registernode.StorePublicKey(response.PublicKey, config.GetPublicKeyPath()); err != nil {
-		return fmt.Errorf("failed to write public certificate: %w", err)
-	}
-
-	// Write private key
-	if err := registernode.StorePrivateKey(response.PrivateKey, config.GetPrivateKeyPath()); err != nil {
-		return fmt.Errorf("failed to write private key: %w", err)
-	}
-
-	roslog.I("New certificates written to disk")
-	return nil
 }
 
 // testNewCertificates tests the new certificates by establishing a connection and adding a log

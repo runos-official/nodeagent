@@ -37,7 +37,11 @@ type NodeRegistrationRequest struct {
 	//
 	// OPTIONAL. An agent older than v1.8.0-rc.5 sends none, and nodeward then chooses a range
 	// blind, exactly as it did before this field existed.
-	HostCidrs     []string `protobuf:"bytes,45,rep,name=hostCidrs,proto3" json:"hostCidrs,omitempty"`
+	HostCidrs []string `protobuf:"bytes,45,rep,name=hostCidrs,proto3" json:"hostCidrs,omitempty"`
+	// OPTIONAL (FPL315). PEM "CERTIFICATE REQUEST" for an ECDSA P-256 key the agent
+	// generated. Present: nodeward returns certificatePem and no key.
+	// Absent: the legacy key-returning response.
+	CsrPem        string `protobuf:"bytes,50,opt,name=csrPem,proto3" json:"csrPem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -107,14 +111,24 @@ func (x *NodeRegistrationRequest) GetHostCidrs() []string {
 	return nil
 }
 
+func (x *NodeRegistrationRequest) GetCsrPem() string {
+	if x != nil {
+		return x.CsrPem
+	}
+	return ""
+}
+
 type NodeRegistrationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Nid           string                 `protobuf:"bytes,50,opt,name=nid,proto3" json:"nid,omitempty"`
-	PrivateKey    string                 `protobuf:"bytes,60,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
-	PublicKey     string                 `protobuf:"bytes,65,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
-	CaCert        string                 `protobuf:"bytes,70,opt,name=caCert,proto3" json:"caCert,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Nid        string                 `protobuf:"bytes,50,opt,name=nid,proto3" json:"nid,omitempty"`
+	PrivateKey string                 `protobuf:"bytes,60,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
+	PublicKey  string                 `protobuf:"bytes,65,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
+	CaCert     string                 `protobuf:"bytes,70,opt,name=caCert,proto3" json:"caCert,omitempty"`
+	// Set only when the request carried csrPem. Then privateKey and
+	// publicKey are empty. caCert is set on both paths.
+	CertificatePem string `protobuf:"bytes,75,opt,name=certificatePem,proto3" json:"certificatePem,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *NodeRegistrationResponse) Reset() {
@@ -175,11 +189,20 @@ func (x *NodeRegistrationResponse) GetCaCert() string {
 	return ""
 }
 
+func (x *NodeRegistrationResponse) GetCertificatePem() string {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return ""
+}
+
 type ServerRegistrationRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MachineId     string                 `protobuf:"bytes,25,opt,name=machineId,proto3" json:"machineId,omitempty"`
-	Aid           string                 `protobuf:"bytes,30,opt,name=aid,proto3" json:"aid,omitempty"`
-	Token         string                 `protobuf:"bytes,35,opt,name=token,proto3" json:"token,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	MachineId string                 `protobuf:"bytes,25,opt,name=machineId,proto3" json:"machineId,omitempty"`
+	Aid       string                 `protobuf:"bytes,30,opt,name=aid,proto3" json:"aid,omitempty"`
+	Token     string                 `protobuf:"bytes,35,opt,name=token,proto3" json:"token,omitempty"`
+	// OPTIONAL (FPL315). Same meaning as NodeRegistrationRequest.csrPem.
+	CsrPem        string `protobuf:"bytes,50,opt,name=csrPem,proto3" json:"csrPem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -235,14 +258,23 @@ func (x *ServerRegistrationRequest) GetToken() string {
 	return ""
 }
 
+func (x *ServerRegistrationRequest) GetCsrPem() string {
+	if x != nil {
+		return x.CsrPem
+	}
+	return ""
+}
+
 type ServerRegistrationResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sid           string                 `protobuf:"bytes,50,opt,name=sid,proto3" json:"sid,omitempty"`
-	PrivateKey    string                 `protobuf:"bytes,60,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
-	PublicKey     string                 `protobuf:"bytes,65,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
-	CaCert        string                 `protobuf:"bytes,70,opt,name=caCert,proto3" json:"caCert,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Sid        string                 `protobuf:"bytes,50,opt,name=sid,proto3" json:"sid,omitempty"`
+	PrivateKey string                 `protobuf:"bytes,60,opt,name=privateKey,proto3" json:"privateKey,omitempty"`
+	PublicKey  string                 `protobuf:"bytes,65,opt,name=publicKey,proto3" json:"publicKey,omitempty"`
+	CaCert     string                 `protobuf:"bytes,70,opt,name=caCert,proto3" json:"caCert,omitempty"`
+	// Set only when the request carried csrPem.
+	CertificatePem string `protobuf:"bytes,75,opt,name=certificatePem,proto3" json:"certificatePem,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ServerRegistrationResponse) Reset() {
@@ -303,35 +335,46 @@ func (x *ServerRegistrationResponse) GetCaCert() string {
 	return ""
 }
 
+func (x *ServerRegistrationResponse) GetCertificatePem() string {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return ""
+}
+
 var File_nodeward_l1sec_proto protoreflect.FileDescriptor
 
 const file_nodeward_l1sec_proto_rawDesc = "" +
 	"\n" +
-	"\x14nodeward_l1sec.proto\x12\x1arunos.nodeward.proto.l1sec\"\x8d\x01\n" +
+	"\x14nodeward_l1sec.proto\x12\x1arunos.nodeward.proto.l1sec\"\xa5\x01\n" +
 	"\x17NodeRegistrationRequest\x12\x1c\n" +
 	"\tmachineId\x18\x19 \x01(\tR\tmachineId\x12\x10\n" +
 	"\x03aid\x18\x1e \x01(\tR\x03aid\x12\x14\n" +
 	"\x05token\x18# \x01(\tR\x05token\x12\x0e\n" +
 	"\x02os\x18( \x01(\tR\x02os\x12\x1c\n" +
-	"\thostCidrs\x18- \x03(\tR\thostCidrs\"\x82\x01\n" +
+	"\thostCidrs\x18- \x03(\tR\thostCidrs\x12\x16\n" +
+	"\x06csrPem\x182 \x01(\tR\x06csrPem\"\xaa\x01\n" +
 	"\x18NodeRegistrationResponse\x12\x10\n" +
 	"\x03nid\x182 \x01(\tR\x03nid\x12\x1e\n" +
 	"\n" +
 	"privateKey\x18< \x01(\tR\n" +
 	"privateKey\x12\x1c\n" +
 	"\tpublicKey\x18A \x01(\tR\tpublicKey\x12\x16\n" +
-	"\x06caCert\x18F \x01(\tR\x06caCert\"a\n" +
+	"\x06caCert\x18F \x01(\tR\x06caCert\x12&\n" +
+	"\x0ecertificatePem\x18K \x01(\tR\x0ecertificatePem\"y\n" +
 	"\x19ServerRegistrationRequest\x12\x1c\n" +
 	"\tmachineId\x18\x19 \x01(\tR\tmachineId\x12\x10\n" +
 	"\x03aid\x18\x1e \x01(\tR\x03aid\x12\x14\n" +
-	"\x05token\x18# \x01(\tR\x05token\"\x84\x01\n" +
+	"\x05token\x18# \x01(\tR\x05token\x12\x16\n" +
+	"\x06csrPem\x182 \x01(\tR\x06csrPem\"\xac\x01\n" +
 	"\x1aServerRegistrationResponse\x12\x10\n" +
 	"\x03sid\x182 \x01(\tR\x03sid\x12\x1e\n" +
 	"\n" +
 	"privateKey\x18< \x01(\tR\n" +
 	"privateKey\x12\x1c\n" +
 	"\tpublicKey\x18A \x01(\tR\tpublicKey\x12\x16\n" +
-	"\x06caCert\x18F \x01(\tR\x06caCert2\x82\x02\n" +
+	"\x06caCert\x18F \x01(\tR\x06caCert\x12&\n" +
+	"\x0ecertificatePem\x18K \x01(\tR\x0ecertificatePem2\x82\x02\n" +
 	"\bNodeward\x12u\n" +
 	"\bRegister\x123.runos.nodeward.proto.l1sec.NodeRegistrationRequest\x1a4.runos.nodeward.proto.l1sec.NodeRegistrationResponse\x12\x7f\n" +
 	"\x0eServerRegister\x125.runos.nodeward.proto.l1sec.ServerRegistrationRequest\x1a6.runos.nodeward.proto.l1sec.ServerRegistrationResponseB!Z\x1fnodeward.runos.com/protos/l1secb\x06proto3"
