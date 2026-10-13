@@ -7,6 +7,29 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.3
+
+This release hardens gateway connections and certificate issuance. Release candidates remain hidden and require an explicit version selection.
+
+### Security
+
+- The agent rejects a server certificate that contains client authentication usage or RunOS agent extensions. Normal CA and hostname verification still apply.
+- Registration and renewal generate an ECDSA P-256 private key locally. Compatible servers sign a certificate request without receiving that private key.
+- Renewals include proof that the agent holds its current key. The agent validates the issued certificate before storing the new credentials.
+- Older servers can return legacy credentials on a successful response. Errors never trigger that fallback. Clock-skew refusals receive one retry.
+
+### Fixed
+
+- A disconnected instruction stream permits reconnection while active operations finish. Queued operations stop, and old replies cannot enter a replacement stream.
+- Active operations share the five-worker limit across reconnects. Upgrade progress remains bound to its original connection.
+- Read-only control-plane calls retry temporary unavailability. Credential issuance and other mutations are not retried automatically.
+
+### Changed
+
+- Reconnects use exponential backoff with full jitter, capped at 30 seconds. A connection that remains up for 60 seconds resets the delay.
+- Upgrade progress carries instruction correlation tags when the control plane requests them. Older control planes retain the existing progress format.
+- Installation command fetches spread retries with bounded jitter while retaining a minimum recovery window for temporary control-plane outages.
+
 ## v1.8.2
 
 One fix to how the agent replies to instructions, in support of node teardown
