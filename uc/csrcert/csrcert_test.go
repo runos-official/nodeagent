@@ -259,16 +259,16 @@ func TestResolveRefusesBadResponses(t *testing.T) {
 	foreign, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	good := ca.sign(t, k.Public(), leafOpts{})
 	cases := map[string]Response{
-		"both empty":          {CACertPEM: ca.pem},
-		"only private key":    {PrivateKey: "priv", CACertPEM: ca.pem},
-		"foreign key":         {CertificatePEM: ca.sign(t, &foreign.PublicKey, leafOpts{}), CACertPEM: ca.pem},
-		"no client auth":      {CertificatePEM: ca.sign(t, k.Public(), leafOpts{eku: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}), CACertPEM: ca.pem},
-		"expired":             {CertificatePEM: ca.sign(t, k.Public(), leafOpts{notBefore: time.Now().Add(-2 * time.Hour), notAfter: time.Now().Add(-time.Hour)}), CACertPEM: ca.pem},
-		"wrong CA":            {CertificatePEM: good, CACertPEM: other.pem},
-		"no CA":               {CertificatePEM: good},
-		"two certificates":    {CertificatePEM: good + good, CACertPEM: ca.pem},
-		"not a PEM":           {CertificatePEM: "garbage", CACertPEM: ca.pem},
-		"wrong PEM type":      {CertificatePEM: strings.Replace(good, "CERTIFICATE", "SOMETHING", 2), CACertPEM: ca.pem},
+		"both empty":       {CACertPEM: ca.pem},
+		"only private key": {PrivateKey: "priv", CACertPEM: ca.pem},
+		"foreign key":      {CertificatePEM: ca.sign(t, &foreign.PublicKey, leafOpts{}), CACertPEM: ca.pem},
+		"no client auth":   {CertificatePEM: ca.sign(t, k.Public(), leafOpts{eku: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}), CACertPEM: ca.pem},
+		"expired":          {CertificatePEM: ca.sign(t, k.Public(), leafOpts{notBefore: time.Now().Add(-2 * time.Hour), notAfter: time.Now().Add(-time.Hour)}), CACertPEM: ca.pem},
+		"wrong CA":         {CertificatePEM: good, CACertPEM: other.pem},
+		"no CA":            {CertificatePEM: good},
+		"two certificates": {CertificatePEM: good + good, CACertPEM: ca.pem},
+		"not a PEM":        {CertificatePEM: "garbage", CACertPEM: ca.pem},
+		"wrong PEM type":   {CertificatePEM: strings.Replace(good, "CERTIFICATE", "SOMETHING", 2), CACertPEM: ca.pem},
 	}
 	for name, resp := range cases {
 		t.Run(name, func(t *testing.T) {
