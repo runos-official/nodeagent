@@ -225,6 +225,28 @@ func startVpnResyncTicker(ctx context.Context) {
 	}()
 }
 
+// handleSignals reads OS signals until a termination signal arrives, then calls
+// cancel. SIGHUP is the reload signal that logrotate sends through systemctl
+// reload after it renames the log file. It reopens the log file and keeps the
+// agent running, so the connection and any running instruction are not
+// affected. A failed reopen is logged and does not end the agent.
+func handleSignals(sigs <-chan os.Signal, reopenLog func() error, cancel func()) {
+	for sig := range sigs {
+		switch sig {
+		case syscall.SIGHUP:
+			if err := reopenLog(); err != nil {
+				roslog.W("Received SIGHUP but could not reopen the log file; keeping the old file", err)
+				continue
+			}
+			roslog.I("Received SIGHUP signal, reopened the log file")
+		default:
+			roslog.I("Received termination signal, shutting down agent", "signal", sig)
+			cancel()
+			return
+		}
+	}
+}
+
 // runAgent handles the main agent functionality. It supervises the per-connection
 // work: the dial, the bidirectional instruction stream, the VPN peer sync (run on
 // every connect plus a periodic self-heal ticker), and the proxy/heartbeat
@@ -254,16 +276,7 @@ func runAgent() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	go func() {
-		sig := <-sigChan
-		switch sig {
-		case syscall.SIGHUP:
-			roslog.I("Received SIGHUP signal, initiating graceful reload")
-		case syscall.SIGINT, syscall.SIGTERM:
-			roslog.I("Received termination signal, shutting down agent", "signal", sig)
-		}
-		rootCancel()
-	}()
+	go handleSignals(sigChan, roslog.ReopenLogFile, rootCancel)
 
 	superviseConnections(rootCtx, commons.NewReconnectBackoff(), runConnection, waitOrDone)
 

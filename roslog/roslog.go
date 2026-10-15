@@ -17,7 +17,7 @@ const logFilePath = "/var/log/runos.log"
 var (
 	programLevel = new(slog.LevelVar)
 	L            *slog.Logger
-	logFile      *os.File
+	logWriter    *reopenWriter
 	logFileMu    sync.Mutex
 )
 
@@ -42,34 +42,27 @@ func initLogger() {
 
 	// Open or create the log file
 	logFileMu.Lock()
-	if logFile == nil {
+	if logWriter == nil {
 		// Ensure directory exists (root-only: the log can contain plaintext
 		// secrets such as PASSWORD= and command payloads).
 		logDir := filepath.Dir(logFilePath)
 		if err := os.MkdirAll(logDir, 0700); err != nil {
 			// Fall back to stderr if we can't create log directory
 			fmt.Fprintf(os.Stderr, "Failed to create log directory %s: %v\n", logDir, err)
-			logFile = os.Stderr
+			logWriter = &reopenWriter{path: logFilePath, f: os.Stderr}
+		} else if w, err := newReopenWriter(logFilePath); err != nil {
+			// Fall back to stderr if we can't open log file
+			fmt.Fprintf(os.Stderr, "Failed to open log file %s: %v\n", logFilePath, err)
+			logWriter = &reopenWriter{path: logFilePath, f: os.Stderr}
 		} else {
-			var err error
-			logFile, err = os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
-			if err != nil {
-				// Fall back to stderr if we can't open log file
-				fmt.Fprintf(os.Stderr, "Failed to open log file %s: %v\n", logFilePath, err)
-				logFile = os.Stderr
-			} else {
-				// Tighten an already-existing world-readable log (O_CREATE does
-				// not change the perms of an existing 0644 file).
-				if err := logFile.Chmod(0600); err != nil {
-					fmt.Fprintf(os.Stderr, "Failed to chmod log file %s: %v\n", logFilePath, err)
-				}
-			}
+			logWriter = w
 		}
 	}
+	w := logWriter
 	logFileMu.Unlock()
 
 	// Always use JSON handler writing to log file
-	handler := slog.NewJSONHandler(logFile, opts)
+	handler := slog.NewJSONHandler(w, opts)
 	L = slog.New(handler)
 }
 

@@ -23,6 +23,7 @@ This release hardens gateway connections and certificate issuance. Release candi
 - A disconnected instruction stream permits reconnection while active operations finish. Queued operations stop, and old replies cannot enter a replacement stream.
 - Active operations share the five-worker limit across reconnects. Upgrade progress remains bound to its original connection.
 - Read-only control-plane calls retry temporary unavailability. Credential issuance and other mutations are not retried automatically.
+- Daily log rotation no longer ends the agent. On the reload signal the agent reopens its log file and keeps its connection and running work.
 
 ### Changed
 
