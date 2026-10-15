@@ -33,7 +33,7 @@ func startInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 	done := make(chan struct{})
 
 	// Set the global stream for outbound messages
-	SetGlobalStream(stream)
+	epoch := setGlobalStream(stream)
 
 	// Create channel for instructions
 	instructionChan := make(chan instructionTask, 20) // Buffer for incoming instructions
@@ -52,6 +52,9 @@ func startInstructionStreamHandler(ctx context.Context, stream l2sec.Nodeward_No
 			// Stop queued work immediately. Active operations finish without blocking reconnect.
 			// Do not close the queue: dispatch goroutines can still select a send during cancellation.
 			cancel()
+			// Fail requests that wait for a reply on this stream. The reply cannot arrive,
+			// and the reconnect waits for them.
+			epoch.end()
 			CloseAllSessions("the node's connection to RunOS went down")
 		}()
 

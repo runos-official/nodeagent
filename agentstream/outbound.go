@@ -2,6 +2,7 @@ package agentstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/runos-official/nodeagent/l2sec"
@@ -9,6 +10,10 @@ import (
 	"sync"
 	"time"
 )
+
+// errStreamEnded is returned to a request that was waiting for a reply when the
+// stream it was sent on ended.
+var errStreamEnded = errors.New("stream to Nodeward ended before the reply arrived")
 
 // Global variables for managing outbound messages
 var (
@@ -22,11 +27,52 @@ var (
 	pendingResponses sync.Map // Maps tag (UUID string) to response channel
 )
 
+// streamEpoch marks one stream. Its channel closes when that stream ends, or when
+// another stream replaces it. A request that waits for a reply on the stream
+// stops waiting at that point, because the reply can no longer arrive.
+type streamEpoch struct {
+	ended chan struct{}
+	once  sync.Once
+}
+
+func newStreamEpoch() *streamEpoch { return &streamEpoch{ended: make(chan struct{})} }
+
+func (e *streamEpoch) end() { e.once.Do(func() { close(e.ended) }) }
+
+var (
+	epochMu      sync.Mutex
+	currentEpoch = func() *streamEpoch { e := newStreamEpoch(); e.end(); return e }()
+)
+
+// beginStreamEpoch ends the epoch of the stream before it and starts a new one.
+func beginStreamEpoch(active bool) *streamEpoch {
+	epochMu.Lock()
+	defer epochMu.Unlock()
+	currentEpoch.end()
+	e := newStreamEpoch()
+	if !active {
+		e.end()
+	}
+	currentEpoch = e
+	return e
+}
+
+func getStreamEpoch() *streamEpoch {
+	epochMu.Lock()
+	defer epochMu.Unlock()
+	return currentEpoch
+}
+
 // SetGlobalStream sets the stream client for sending outbound messages
 func SetGlobalStream(client l2sec.Nodeward_NodeAgentStreamClient) {
+	setGlobalStream(client)
+}
+
+func setGlobalStream(client l2sec.Nodeward_NodeAgentStreamClient) *streamEpoch {
 	streamMutex.Lock()
 	defer streamMutex.Unlock()
 	globalStream = client
+	return beginStreamEpoch(client != nil)
 }
 
 // SendToNodeward sends a message to Nodeward.
@@ -125,6 +171,9 @@ func SendAndWaitForResponse(ctx context.Context, msg *l2sec.FromNodeAgent) (*l2s
 	// Ensure cleanup when we're done
 	defer pendingResponses.Delete(tagID.String())
 
+	// The stream this request goes out on. If it ends, no reply can arrive.
+	epoch := getStreamEpoch()
+
 	// Send the message
 	if err := SendToNodeward(msg); err != nil {
 		return nil, fmt.Errorf("failed to send message: %w", err)
@@ -138,6 +187,17 @@ func SendAndWaitForResponse(ctx context.Context, msg *l2sec.FromNodeAgent) (*l2s
 			return nil, fmt.Errorf("response channel was closed unexpectedly")
 		}
 		return response, nil
+	case <-epoch.ended:
+		// A reply can arrive only on the stream that carried the request.
+		// Prefer a reply that arrived at the same moment.
+		select {
+		case response, ok := <-responseChan:
+			if ok {
+				return response, nil
+			}
+		default:
+		}
+		return nil, errStreamEnded
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
