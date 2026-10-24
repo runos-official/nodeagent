@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,22 @@ const (
 	// UpgradeNodeK8sLogType is the message type carrying streamed upgrade log lines.
 	UpgradeNodeK8sLogType = "UpgradeNodeK8sLog"
 )
+
+// Command runners for the upgrade. Tests replace them. upgradeRunShell is
+// only for constant commands and for apt-get, which keeps its hang retry; every
+// request value it carries is validated and quoted. Everything else runs
+// without a shell.
+var (
+	upgradeRunShell   = commons.ExecuteCommandGetResponse2
+	upgradeRunArgv    = commons.ExecuteArgvGetResponse
+	upgradeStreamArgv = commons.ExecuteArgvStreaming
+	upgradeWriteFile  = os.WriteFile
+	upgradeHostname   = commons.GetHostname
+	upgradeSleep      = time.Sleep
+)
+
+// kubernetesAptSourcePath is the apt source list the upgrade writes.
+const kubernetesAptSourcePath = "/etc/apt/sources.list.d/kubernetes.list"
 
 type upgradeNodeK8sRequest struct {
 	TargetKubernetesVersion string `json:"targetKubernetesVersion"`
@@ -62,12 +79,17 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	if err := json.Unmarshal(jsonData, &req); err != nil {
 		return failUpgrade(progress, "", tag, "failed to parse payload: %v", err), nil
 	}
+	// Refuse a malformed version before any command runs. Each value goes into
+	// a command that runs as root.
+	if err := validateUpgradeNodeK8sRequest(req); err != nil {
+		return failUpgrade(progress, "", tag, "refusing the upgrade: %v", err), nil
+	}
 
 	previous := getCurrentKubeletVersion()
 	sendUpgradeLog(progress, fmt.Sprintf("Starting K8s upgrade %s → %s (isFirstCp=%t)",
 		previous, req.TargetKubernetesVersion, req.IsFirstCp), 1)
 
-	hostname, err := commons.GetHostname()
+	hostname, err := upgradeHostname()
 	if err != nil {
 		return failUpgrade(progress, previous, tag, "failed to get hostname: %v", err), nil
 	}
@@ -79,13 +101,15 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	// un-cordon" race; if it still fails we abort loud and obvious with no changes
 	// made, rather than dying half-way through repo configuration.
 	sendUpgradeLog(progress, "Pre-flight: verifying pkgs.k8s.io is reachable before making changes", 1)
-	if out, err := runNetworkCommandWithRetry(progress, "pkgs.k8s.io reachability", "curl -sS -o /dev/null https://pkgs.k8s.io"); err != nil {
+	if out, err := runNetworkCommandWithRetry(progress, "pkgs.k8s.io reachability", func() (string, error) {
+		return upgradeRunArgv("curl", "-sS", "-o", "/dev/null", "https://pkgs.k8s.io")
+	}); err != nil {
 		return failUpgrade(progress, previous, tag, "pre-flight connectivity check failed: %s (aborting before any changes) (%s)",
 			classifyNetworkError(out, err), tailOutput(out, 500)), nil
 	}
 
 	sendUpgradeLog(progress, fmt.Sprintf("Configuring K8s apt repo for %s", req.KubeRepoVersion), 1)
-	if out, err := commons.ExecuteCommandGetResponse2("mkdir -p /etc/apt/keyrings"); err != nil {
+	if out, err := upgradeRunArgv("mkdir", "-p", "/etc/apt/keyrings"); err != nil {
 		return failUpgrade(progress, previous, tag, "mkdir keyrings failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
 	// Fetch the key to a temp file (with retry), THEN dearmor it as a separate
@@ -93,35 +117,36 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	// and "no valid OpenPGP data" while burying curl's real "could not resolve
 	// host", and a single transient failure aborted the whole upgrade. Splitting
 	// the steps lets us retry only the network fetch and report the true cause.
-	fetchCmd := fmt.Sprintf(
-		"curl -fsSL https://pkgs.k8s.io/core:/stable:/%s/deb/Release.key -o /tmp/kubernetes-release.key",
-		req.KubeRepoVersion)
-	if out, err := runNetworkCommandWithRetry(progress, "apt keyring fetch", fetchCmd); err != nil {
+	keyURL := fmt.Sprintf("https://pkgs.k8s.io/core:/stable:/%s/deb/Release.key", req.KubeRepoVersion)
+	if out, err := runNetworkCommandWithRetry(progress, "apt keyring fetch", func() (string, error) {
+		return upgradeRunArgv("curl", "-fsSL", keyURL, "-o", "/tmp/kubernetes-release.key")
+	}); err != nil {
 		return failUpgrade(progress, previous, tag, "apt keyring fetch failed: %s (%s)", classifyNetworkError(out, err), tailOutput(out, 500)), nil
 	}
-	dearmorCmd := "gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/kubernetes-release.key"
-	if out, err := commons.ExecuteCommandGetResponse2(dearmorCmd); err != nil {
+	if out, err := upgradeRunArgv("gpg", "--batch", "--yes", "--dearmor",
+		"-o", "/etc/apt/keyrings/kubernetes-apt-keyring.gpg", "/tmp/kubernetes-release.key"); err != nil {
 		return failUpgrade(progress, previous, tag, "apt keyring dearmor failed: %s (%s)", classifyNetworkError(out, err), tailOutput(out, 500)), nil
 	}
-	srcCmd := fmt.Sprintf(
-		`echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/%s/deb/ /' > /etc/apt/sources.list.d/kubernetes.list`,
+	// Go writes the source list; the old `echo ... > file` needed a shell.
+	source := fmt.Sprintf(
+		"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/%s/deb/ /\n",
 		req.KubeRepoVersion)
-	if out, err := commons.ExecuteCommandGetResponse2(srcCmd); err != nil {
-		return failUpgrade(progress, previous, tag, "writing kubernetes.list failed: %v (%s)", err, tailOutput(out, 500)), nil
+	if err := upgradeWriteFile(kubernetesAptSourcePath, []byte(source), 0o644); err != nil {
+		return failUpgrade(progress, previous, tag, "writing kubernetes.list failed: %v", err), nil
 	}
-	if out, err := commons.ExecuteCommandGetResponse2("apt-get update"); err != nil {
+	if out, err := upgradeRunShell("apt-get update"); err != nil {
 		return failUpgrade(progress, previous, tag, "apt-get update failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
 
 	sendUpgradeLog(progress, fmt.Sprintf("Installing kubeadm %s", req.TargetKubernetesVersion), 1)
-	if out, err := commons.ExecuteCommandGetResponse2("apt-mark unhold kubeadm"); err != nil {
+	if out, err := upgradeRunShell("apt-mark unhold kubeadm"); err != nil {
 		return failUpgrade(progress, previous, tag, "apt-mark unhold kubeadm failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
-	kubeadmCmd := fmt.Sprintf("apt-get install -y kubeadm=%s-*", req.TargetKubernetesVersion)
-	if out, err := commons.ExecuteCommandGetResponse2(kubeadmCmd); err != nil {
+	kubeadmCmd := "apt-get install -y " + shellQuote("kubeadm="+req.TargetKubernetesVersion+"-*")
+	if out, err := upgradeRunShell(kubeadmCmd); err != nil {
 		return failUpgrade(progress, previous, tag, "kubeadm install failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
-	if out, err := commons.ExecuteCommandGetResponse2("apt-mark hold kubeadm"); err != nil {
+	if out, err := upgradeRunShell("apt-mark hold kubeadm"); err != nil {
 		return failUpgrade(progress, previous, tag, "apt-mark hold kubeadm failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
 
@@ -135,7 +160,7 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	if req.IsFirstCp {
 		upgradeCmd := fmt.Sprintf("kubeadm upgrade apply v%s --yes", req.TargetKubernetesVersion)
 		sendUpgradeLog(progress, "Running kubeadm upgrade apply", 1)
-		out, err := commons.ExecuteCommandStreaming(upgradeCmd, forwardKubeadmProgress)
+		out, err := upgradeStreamArgv(forwardKubeadmProgress, "kubeadm", "upgrade", "apply", "v"+req.TargetKubernetesVersion, "--yes")
 		if err != nil {
 			// `kubeadm upgrade apply` can exit non-zero due to transient gRPC disruption
 			// while it's restarting its own control-plane static pods — even though the
@@ -150,28 +175,29 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	} else {
 		upgradeCmd := "kubeadm upgrade node"
 		sendUpgradeLog(progress, "Running kubeadm upgrade node", 1)
-		if out, err := commons.ExecuteCommandStreaming(upgradeCmd, forwardKubeadmProgress); err != nil {
+		if out, err := upgradeStreamArgv(forwardKubeadmProgress, "kubeadm", "upgrade", "node"); err != nil {
 			return failUpgrade(progress, previous, tag, "%s failed: %v (%s)", upgradeCmd, err, tailOutput(out, 500)), nil
 		}
 	}
 
 	sendUpgradeLog(progress, fmt.Sprintf("Installing kubelet and kubectl %s", req.TargetKubernetesVersion), 1)
-	if out, err := commons.ExecuteCommandGetResponse2("apt-mark unhold kubelet kubectl"); err != nil {
+	if out, err := upgradeRunShell("apt-mark unhold kubelet kubectl"); err != nil {
 		return failUpgrade(progress, previous, tag, "apt-mark unhold kubelet kubectl failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
-	kubeletCmd := fmt.Sprintf("apt-get install -y kubelet=%s-* kubectl=%s-*", req.TargetKubernetesVersion, req.TargetKubernetesVersion)
-	if out, err := commons.ExecuteCommandGetResponse2(kubeletCmd); err != nil {
+	kubeletCmd := "apt-get install -y " + shellQuote("kubelet="+req.TargetKubernetesVersion+"-*") +
+		" " + shellQuote("kubectl="+req.TargetKubernetesVersion+"-*")
+	if out, err := upgradeRunShell(kubeletCmd); err != nil {
 		return failUpgrade(progress, previous, tag, "kubelet/kubectl install failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
-	if out, err := commons.ExecuteCommandGetResponse2("apt-mark hold kubelet kubectl"); err != nil {
+	if out, err := upgradeRunShell("apt-mark hold kubelet kubectl"); err != nil {
 		return failUpgrade(progress, previous, tag, "apt-mark hold kubelet kubectl failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
 
 	currentContainerd := getCurrentContainerdVersion()
 	if !strings.HasPrefix(currentContainerd, req.TargetContainerdVersion) {
 		sendUpgradeLog(progress, fmt.Sprintf("Upgrading containerd %s → %s", currentContainerd, req.TargetContainerdVersion), 1)
-		cmd := fmt.Sprintf("apt-get install -y containerd=%s-*", req.TargetContainerdVersion)
-		if out, err := commons.ExecuteCommandGetResponse2(cmd); err != nil {
+		cmd := "apt-get install -y " + shellQuote("containerd="+req.TargetContainerdVersion+"-*")
+		if out, err := upgradeRunShell(cmd); err != nil {
 			return failUpgrade(progress, previous, tag, "containerd upgrade failed: %v (%s)", err, tailOutput(out, 500)), nil
 		}
 	} else {
@@ -181,10 +207,12 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	currentHelm := getCurrentHelmVersion()
 	if currentHelm != req.TargetHelmVersion {
 		sendUpgradeLog(progress, fmt.Sprintf("Upgrading helm %s → %s", currentHelm, req.TargetHelmVersion), 1)
-		cmd := fmt.Sprintf(
-			"curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | DESIRED_VERSION=v%s bash",
-			req.TargetHelmVersion)
-		if out, err := runNetworkCommandWithRetry(progress, "helm install", cmd); err != nil {
+		// The pipe needs a shell. The version is validated and quoted.
+		cmd := "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | DESIRED_VERSION=" +
+			shellQuote("v"+req.TargetHelmVersion) + " bash"
+		if out, err := runNetworkCommandWithRetry(progress, "helm install", func() (string, error) {
+			return upgradeRunShell(cmd)
+		}); err != nil {
 			return failUpgrade(progress, previous, tag, "helm upgrade failed: %s (%s)", classifyNetworkError(out, err), tailOutput(out, 500)), nil
 		}
 	} else {
@@ -192,7 +220,7 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	}
 
 	sendUpgradeLog(progress, "Reloading systemd and restarting kubelet", 1)
-	if out, err := commons.ExecuteCommandGetResponse2("systemctl daemon-reload && systemctl restart kubelet"); err != nil {
+	if out, err := upgradeRunShell("systemctl daemon-reload && systemctl restart kubelet"); err != nil {
 		return failUpgrade(progress, previous, tag, "kubelet restart failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
 
@@ -215,12 +243,12 @@ var networkRetryDelays = []time.Duration{5 * time.Second, 15 * time.Second, 45 *
 // runNetworkCommandWithRetry runs a command that depends on outbound network
 // access, retrying with backoff on failure. label is used only for log lines.
 // It returns the output and error of the final attempt.
-func runNetworkCommandWithRetry(progress *ProgressTagger, label, command string) (string, error) {
+func runNetworkCommandWithRetry(progress *ProgressTagger, label string, run func() (string, error)) (string, error) {
 	attempts := len(networkRetryDelays) + 1
 	var out string
 	var err error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		out, err = commons.ExecuteCommandGetResponse2(command)
+		out, err = run()
 		if err == nil {
 			return out, nil
 		}
@@ -228,7 +256,7 @@ func runNetworkCommandWithRetry(progress *ProgressTagger, label, command string)
 			delay := networkRetryDelays[attempt-1]
 			sendUpgradeLog(progress, fmt.Sprintf("%s failed (attempt %d/%d): %s; retrying in %s",
 				label, attempt, attempts, classifyNetworkError(out, err), delay), 2)
-			time.Sleep(delay)
+			upgradeSleep(delay)
 		}
 	}
 	return out, err
@@ -310,7 +338,7 @@ func failUpgrade(progress *ProgressTagger, prev, tag, format string, args ...any
 }
 
 func getCurrentKubeletVersion() string {
-	out, err := commons.ExecuteCommandGetResponse2("kubelet --version")
+	out, err := upgradeRunShell("kubelet --version")
 	if err != nil {
 		return ""
 	}
@@ -322,7 +350,7 @@ func getCurrentKubeletVersion() string {
 }
 
 func getCurrentContainerdVersion() string {
-	out, err := commons.ExecuteCommandGetResponse2(`dpkg-query -W -f='${Version}' containerd`)
+	out, err := upgradeRunShell(`dpkg-query -W -f='${Version}' containerd`)
 	if err != nil {
 		return ""
 	}
@@ -330,7 +358,7 @@ func getCurrentContainerdVersion() string {
 }
 
 func getCurrentHelmVersion() string {
-	out, err := commons.ExecuteCommandGetResponse2("helm version --short --client")
+	out, err := upgradeRunShell("helm version --short --client")
 	if err != nil {
 		return ""
 	}
@@ -347,14 +375,14 @@ func verifyServerAtVersion(target string, timeout time.Duration) bool {
 	cmd := `kubectl version -o jsonpath='{.serverVersion.gitVersion}'`
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		out, err := commons.ExecuteCommandGetResponse2(cmd)
+		out, err := upgradeRunShell(cmd)
 		if err == nil {
 			v := strings.TrimSpace(strings.Trim(out, "'"))
 			if v == expected {
 				return true
 			}
 		}
-		time.Sleep(5 * time.Second)
+		upgradeSleep(5 * time.Second)
 	}
 	return false
 }
@@ -368,21 +396,21 @@ func verifyServerAtVersion(target string, timeout time.Duration) bool {
 // signal that the upgrade has taken effect on this node.
 func waitForNodeAtVersion(hostname, targetVersion string, timeout time.Duration) error {
 	expectedVersion := "v" + targetVersion
-	versionCmd := fmt.Sprintf(`kubectl get node %s -o jsonpath='{.status.nodeInfo.kubeletVersion}'`, hostname)
-	readyCmd := fmt.Sprintf(`kubectl get node %s -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'`, hostname)
+	versionArgs := []string{"get", "node", hostname, "-o", "jsonpath={.status.nodeInfo.kubeletVersion}"}
+	readyArgs := []string{"get", "node", hostname, "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`}
 	deadline := time.Now().Add(timeout)
 	var lastVersion, lastReady string
 	for time.Now().Before(deadline) {
-		if out, err := commons.ExecuteCommandGetResponse2(versionCmd); err == nil {
+		if out, err := upgradeRunArgv("kubectl", versionArgs...); err == nil {
 			lastVersion = strings.TrimSpace(strings.Trim(out, "'"))
 		}
-		if out, err := commons.ExecuteCommandGetResponse2(readyCmd); err == nil {
+		if out, err := upgradeRunArgv("kubectl", readyArgs...); err == nil {
 			lastReady = strings.TrimSpace(strings.Trim(out, "'"))
 		}
 		if lastVersion == expectedVersion && lastReady == "True" {
 			return nil
 		}
-		time.Sleep(5 * time.Second)
+		upgradeSleep(5 * time.Second)
 	}
 	return fmt.Errorf("node %s did not reach kubeletVersion=%s Ready=True within %s (last seen: version=%q ready=%q)",
 		hostname, expectedVersion, timeout, lastVersion, lastReady)

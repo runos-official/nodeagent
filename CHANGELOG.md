@@ -7,6 +7,13 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## Unreleased
+
+### Security
+
+- The Kubernetes upgrade instruction refuses a version field that does not have the shape the control plane sends. Kubernetes, containerd and helm versions must be X.Y.Z, and the apt repo version must be vX.Y for the same minor. The agent checks this before it runs any command (FCR 1648).
+- The upgrade runs curl, gpg, kubeadm and kubectl without a shell, and writes the apt source list from Go. The apt-get and helm steps that still use a shell quote each version.
+
 ## v1.8.3
 
 This release hardens gateway connections and certificate issuance. Release candidates remain hidden and require an explicit version selection.

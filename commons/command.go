@@ -49,8 +49,42 @@ func redactSecrets(command string) string {
 // waiting for the whole command to finish.
 func ExecuteCommandStreaming(command string, onLine func(string)) (string, error) {
 	roslog.I("Executing command (streaming)", "command", redactSecrets(command))
+	return streamCommand(exec.Command("/bin/sh", "-c", command), onLine)
+}
 
-	cmd := exec.Command("/bin/sh", "-c", command)
+// ExecuteArgvStreaming is ExecuteCommandStreaming without a shell: it runs name
+// with args directly. Use it when an argument comes from a request, so the
+// argument can never be read as shell syntax.
+func ExecuteArgvStreaming(onLine func(string), name string, args ...string) (string, error) {
+	roslog.I("Executing direct command (streaming)", "target", name, "args", redactArgs(args))
+	return streamCommand(exec.Command(name, args...), onLine)
+}
+
+// ExecuteArgvGetResponse runs name with args directly (no shell) and returns
+// the combined output and the exit error. Unlike ExecuteDirectCommandGetResponse
+// it keeps the output on failure, so a caller can report the cause.
+func ExecuteArgvGetResponse(name string, args ...string) (string, error) {
+	roslog.I("Executing direct command", "target", name, "args", redactArgs(args))
+	output, err := exec.Command(name, args...).CombinedOutput()
+	outputString := string(output)
+	roslog.I("Command output", "output", outputString)
+	if err != nil {
+		roslog.E("Command execution failed", err)
+	}
+	return outputString, err
+}
+
+func redactArgs(args []string) []string {
+	redacted := make([]string, len(args))
+	for i, a := range args {
+		redacted[i] = redactSecrets(a)
+	}
+	return redacted
+}
+
+// streamCommand starts cmd, calls onLine for each output line, and returns the
+// combined output and the exit error.
+func streamCommand(cmd *exec.Cmd, onLine func(string)) (string, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -289,11 +323,7 @@ func ExecuteDetachedSystemdScopeArgv(argv ...string) error {
 func ExecuteDirectCommandGetResponse(target string, withLog bool, args ...string) (*string, error) {
 	if withLog {
 		// Redact each arg: secrets are sometimes passed as a single arg value.
-		redactedArgs := make([]string, len(args))
-		for i, a := range args {
-			redactedArgs[i] = redactSecrets(a)
-		}
-		roslog.I("Executing direct command", "target", target, "args", redactedArgs)
+		roslog.I("Executing direct command", "target", target, "args", redactArgs(args))
 	}
 
 	// Create an *exec.Cmd
