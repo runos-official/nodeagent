@@ -182,6 +182,11 @@ sudo runos update --version vX.Y.Z
 The updater prints the previous and new versions on completion. If you are already
 on the requested version it reports "No Update Available" and makes no changes.
 
+The updater never moves the agent down by itself. An advertised version older than
+the running one keeps the running binary. An explicit older version needs
+`--allow-downgrade`, and the agent logs the downgrade. A release below the agent's
+built-in minimum version is always refused.
+
 **Verify operation after updating**
 ```bash
 # Confirm the new version

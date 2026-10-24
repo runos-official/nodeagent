@@ -73,6 +73,13 @@ asset directly to `/usr/local/bin/runos`.
    downstream by what the control plane advertises (`NODE_AGENT_VERSION`) and a
    per-cluster conductor pin; publishing a release does not roll the fleet.
 
+4. **Version floor.** `runos update` refuses a release below the minimum version
+   built into the agent, because such a release lacks security fixes. It also
+   refuses an explicit version below the running one unless the caller passes
+   `--allow-downgrade`, and it keeps the running binary when the advertised
+   version is older. This stops a version choice from moving a node back to a
+   vulnerable release.
+
 Together these defend against **post-build tampering of the distributed
 artifact** (replace-asset and swap-checksum attacks): a swapped release binary
 no longer matches its attestation or its published sha256 and is detectable.

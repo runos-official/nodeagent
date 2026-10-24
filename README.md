@@ -65,6 +65,12 @@ runos update --version v0.24.0   # pin to an exact release
 Which version a node should run is decided by the RunOS control plane, so a plain
 `runos update` moves you to the version selected for your cluster.
 
+`runos update` never moves a node down by itself. An advertised version older than
+the running one keeps the running binary. An explicit older `--version` is refused
+unless you pass `--allow-downgrade`, and the agent logs that downgrade to the control
+plane. A release below the agent's built-in minimum version is always refused,
+because it lacks security fixes.
+
 ## Security
 
 The agent talks to the control plane over mutual TLS only and holds no inbound

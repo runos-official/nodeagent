@@ -480,12 +480,16 @@ runos status
 Update the installed node agent binary to the advertised (or a pinned) version.
 
 ```bash
-runos update [--version <tag>]
+runos update [--version <tag>] [--allow-downgrade] [--json]
 ```
 
 **Flags:**
 - `--version <tag>` (optional) - Exact release tag to pin to (e.g. `v0.24.0`).
   A leading `v` is accepted and stripped.
+- `--allow-downgrade` (optional) - Allow an explicit `--version` below the running
+  version. The agent logs the downgrade to the control plane. This flag never
+  allows a release below the built-in minimum version.
+- `--json` (optional) - Print one machine-readable result object.
 
 **Description:**
 Downloads and installs a node agent release from the installer. The agent ships
@@ -497,6 +501,10 @@ version, never a floating "latest".
 - `runos update` (no flag) updates to the version advertised by the installer.
   When the version is empty, no `?version=` pin is sent and the installer is
   fail-closed: it will **not** fall back to a floating "latest".
+- The version floor runs before any download. A target below the built-in minimum
+  version is refused. An explicit `--version` below the running version is refused
+  unless `--allow-downgrade` is given. An advertised version below the running
+  version keeps the running binary and reports the status `kept`.
 
 **Usage:**
 ```bash

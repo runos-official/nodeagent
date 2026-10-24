@@ -99,7 +99,9 @@ func resolveAdvertisedVersion() (string, error) {
 // UpdateResult is the stable, machine-readable outcome of an update run. It is
 // emitted as a single JSON object when the caller requests --json.
 type UpdateResult struct {
-	// Status is one of: "updated", "up-to-date", "completed", "failed".
+	// Status is one of: "updated", "up-to-date", "completed", "kept", "failed".
+	// "kept" means the advertised version is older than the running one, so
+	// the running binary stays (FCR 1650).
 	Status          string `json:"status"`
 	PreviousVersion string `json:"previousVersion"`
 	NewVersion      string `json:"newVersion"`
@@ -140,12 +142,19 @@ type UpdateResult struct {
 // already-reported error (via roslog.Fail) so the command exits non-zero with a
 // single canonical failure block; in --json mode it returns a plain error after
 // emitting the failure result object.
-func UpdateNodeAgent(version string, asJSON bool) error {
+//
+// Before any download, checkVersionFloor applies the downgrade policy (FCR
+// 1650). A target below MinimumVersion is always refused. An explicit
+// --version below the running version is refused unless allowDowngrade is
+// set, and an allowed downgrade is logged to the control plane. An advertised
+// version below the running version keeps the running binary.
+func UpdateNodeAgent(version string, allowDowngrade, asJSON bool) error {
 	// Resolve and validate the exact target version up front. The agent ships as
 	// attested binaries, so an update must name an exact semver tag; floating
 	// values ("latest") are rejected and an empty version is fail-closed.
 	version = strings.TrimSpace(version)
-	if version == "" {
+	advertised := version == ""
+	if advertised {
 		// No explicit pin: resolve the EXACT version advertised by the control
 		// plane (conductor) for this account and pin to it. This is not a floating
 		// "latest" -- conductor returns a specific tag, which is then validated and
@@ -175,6 +184,36 @@ func UpdateNodeAgent(version string, asJSON bool) error {
 	currentVersion := getInstalledVersion()
 	roslog.I("Starting node agent update", "current_version", currentVersion, "target_version", tag)
 
+	// The downgrade floor runs before anything is fetched or replaced.
+	running := runningVersion()
+	decision, reason := checkVersionFloor(tag, running, advertised, allowDowngrade)
+	switch decision {
+	case floorRefuse:
+		roslog.W("Node agent update refused by the version floor", nil, "running_version", running, "target_version", tag, "reason", reason)
+		if err := addNodelog(2, "AgentDowngradeRefused", "Node agent update refused: "+reason); err != nil {
+			roslog.I("Could not add nodelog", "error", err)
+		}
+		remedy := fmt.Sprintf("pick a release at or above the running version; releases below %s are never installed", MinimumVersion)
+		return fail(asJSON, tag, currentVersion, reason, remedy)
+	case floorSkip:
+		roslog.W("Node agent update skipped: advertised version is older", nil, "running_version", running, "target_version", tag)
+		if err := addNodelog(2, "AgentDowngradeSkipped", "Node agent update skipped: "+reason); err != nil {
+			roslog.I("Could not add nodelog", "error", err)
+		}
+		result := UpdateResult{Status: "kept", PreviousVersion: currentVersion, NewVersion: currentVersion, TargetVersion: tag}
+		if asJSON {
+			emitJSON(result)
+			return nil
+		}
+		fmt.Printf("✓ Kept the running version: %s\n\n", reason)
+		return nil
+	case floorAllowDowngrade:
+		roslog.W("Node agent downgrade allowed by --allow-downgrade", nil, "running_version", running, "target_version", tag)
+		if err := addNodelog(2, "AgentDowngrade", "Node agent "+reason); err != nil {
+			roslog.I("Could not add nodelog", "error", err)
+		}
+	}
+
 	if !asJSON {
 		fmt.Printf("\n╔═══════════════════════════════════════════════╗\n")
 		fmt.Printf("║   RunOS Node Agent Update                     ║\n")
@@ -189,7 +228,7 @@ func UpdateNodeAgent(version string, asJSON bool) error {
 	// Perform the verified swap: download + sha256-verify + atomic replace.
 	if err := installVerifiedBinary(tag); err != nil {
 		roslog.E("Node agent update failed", err)
-		if err2 := backend.AddNodelog(1, "AgentUpdateFailure", fmt.Sprintf("Node agent update failed: %v", err)); err2 != nil {
+		if err2 := addNodelog(1, "AgentUpdateFailure", fmt.Sprintf("Node agent update failed: %v", err)); err2 != nil {
 			roslog.I("Could not add nodelog", "error", err2)
 		}
 		cause := err.Error()
@@ -200,7 +239,7 @@ func UpdateNodeAgent(version string, asJSON bool) error {
 	// Restart the service so the new binary takes over.
 	if err := restartService(); err != nil {
 		roslog.E("Node agent service restart failed", err)
-		if err2 := backend.AddNodelog(1, "AgentUpdateFailure", fmt.Sprintf("Node agent restart failed after update: %v", err)); err2 != nil {
+		if err2 := addNodelog(1, "AgentUpdateFailure", fmt.Sprintf("Node agent restart failed after update: %v", err)); err2 != nil {
 			roslog.I("Could not add nodelog", "error", err2)
 		}
 		cause := fmt.Sprintf("restart runos.service after install: %v", err)
@@ -356,6 +395,10 @@ func atomicInstall(dst string, data []byte) error {
 	return nil
 }
 
+// addNodelog sends a node log entry to the control plane. Declared as a var
+// so tests do not dial nodeward.
+var addNodelog = backend.AddNodelog
+
 // restartService restarts runos.service so the freshly installed binary takes
 // over. Declared via a var so tests can stub it.
 var restartService = func() error {
@@ -417,7 +460,7 @@ func printResult(r UpdateResult) {
 
 		roslog.I("Node agent updated successfully", "old_version", r.PreviousVersion, "new_version", r.NewVersion)
 
-		if err := backend.AddNodelog(3, "AgentUpdated", fmt.Sprintf("Node agent updated from %s to %s", r.PreviousVersion, r.NewVersion)); err != nil {
+		if err := addNodelog(3, "AgentUpdated", fmt.Sprintf("Node agent updated from %s to %s", r.PreviousVersion, r.NewVersion)); err != nil {
 			roslog.I("Could not add nodelog", "error", err)
 		}
 
@@ -439,7 +482,7 @@ func printResult(r UpdateResult) {
 
 		roslog.I("Node agent update completed", "old_version", r.PreviousVersion, "new_version", r.NewVersion)
 
-		if err := backend.AddNodelog(3, "AgentUpdated", "The node agent has been updated"); err != nil {
+		if err := addNodelog(3, "AgentUpdated", "The node agent has been updated"); err != nil {
 			roslog.I("Could not add nodelog", "error", err)
 		}
 	}
