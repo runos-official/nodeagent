@@ -7,6 +7,16 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.8.5
+
+This release stops `runos update` from moving a node to an older release.
+
+### Security
+
+- `runos update` refuses a release below the minimum version built into the agent (v1.8.4, the first release with the FCR 1648 fix). The check runs before any download (FCR 1650).
+- An explicit `--version` below the running version is refused unless the caller passes the new `--allow-downgrade` flag. The agent logs an allowed downgrade to the control plane.
+- An advertised version below the running version keeps the running binary. The JSON result reports the status `kept`.
+
 ## v1.8.4
 
 This release hardens the Kubernetes upgrade instruction against malformed version fields.
