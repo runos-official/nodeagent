@@ -1,19 +1,20 @@
 module github.com/runos-official/nodeagent
 
-go 1.22.0
+go 1.26.0
 
 toolchain go1.26.10
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.19.0
-	golang.org/x/net v0.23.0
-	golang.org/x/sys v0.18.0
-	golang.org/x/term v0.18.0
-	google.golang.org/grpc v1.64.0
-	google.golang.org/protobuf v1.34.1
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
+	google.golang.org/grpc v1.83.1
+	google.golang.org/protobuf v1.36.11
+	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.30.1
 	k8s.io/apimachinery v0.30.1
 	k8s.io/client-go v0.30.1
@@ -23,7 +24,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/go-logr/logr v1.4.1 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
@@ -52,15 +53,13 @@ require (
 	github.com/subosito/gotenv v1.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
-	golang.org/x/oauth2 v0.18.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	google.golang.org/appengine v1.6.8 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/klog/v2 v2.120.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
