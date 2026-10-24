@@ -19,7 +19,7 @@ This release stops `runos update` from moving a node to an older release.
 
 ### Changed
 
-- Dependencies with known, reachable vulnerabilities move to fixed releases: golang.org/x/net v0.23.0 to v0.60.0 (HTTP/2 server and transport fixes), google.golang.org/grpc v1.64.0 to v1.83.1 (HTTP/2 DATA frame memory exhaustion and more), golang.org/x/text to v0.42.0 and gorilla/websocket to v1.5.3. grpc 1.83 needs Go 1.26 language mode, so go.mod now declares go 1.26.0. govulncheck reports no vulnerabilities (FCR 1671).
+- Dependencies with known, reachable vulnerabilities move to fixed releases: golang.org/x/net v0.23.0 to v0.60.0 (HTTP/2 server and transport fixes), google.golang.org/grpc v1.64.0 to v1.83.2 (HTTP/2 DATA frame memory exhaustion, and in v1.83.2 a server panic on a missing authority header), golang.org/x/text to v0.42.0 and gorilla/websocket to v1.5.3. grpc 1.83 needs Go 1.26 language mode, so go.mod now declares go 1.26.0. govulncheck reports no vulnerabilities (FCR 1671).
 - The agent builds with Go 1.26.10 (go.mod toolchain line). v1.8.5-rc.2 and earlier built with Go 1.22.0, a line without security fixes; 1.26.10 carries the standard-library fixes, including the HTTP/2 SETTINGS denial of service (CVE-2026-78669) (FCR 1654).
 - `runos test` proves that Nodeward answers with a standard gRPC health check instead of gRPC reflection, so Nodeward can stop serving reflection on its public registration port (FCR 1649, FCR 1226). A Nodeward without the health service still passes, because its Unimplemented answer proves the server answers. The check is now named "Nodeward gRPC server answers".
 
