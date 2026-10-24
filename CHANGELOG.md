@@ -19,6 +19,7 @@ This release stops `runos update` from moving a node to an older release.
 
 ### Changed
 
+- The agent builds with Go 1.26.10 (go.mod toolchain line). v1.8.5-rc.2 and earlier built with Go 1.22.0, a line without security fixes; 1.26.10 carries the standard-library fixes, including the HTTP/2 SETTINGS denial of service (CVE-2026-78669) (FCR 1654).
 - `runos test` proves that Nodeward answers with a standard gRPC health check instead of gRPC reflection, so Nodeward can stop serving reflection on its public registration port (FCR 1649, FCR 1226). A Nodeward without the health service still passes, because its Unimplemented answer proves the server answers. The check is now named "Nodeward gRPC server answers".
 
 ## v1.8.4

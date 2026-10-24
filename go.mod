@@ -2,6 +2,8 @@ module github.com/runos-official/nodeagent
 
 go 1.22.0
 
+toolchain go1.26.10
+
 require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.0
