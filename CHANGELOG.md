@@ -17,6 +17,10 @@ This release stops `runos update` from moving a node to an older release.
 - An explicit `--version` below the running version is refused unless the caller passes the new `--allow-downgrade` flag. The agent logs an allowed downgrade to the control plane.
 - An advertised version below the running version keeps the running binary. The JSON result reports the status `kept`.
 
+### Changed
+
+- `runos test` proves that Nodeward answers with a standard gRPC health check instead of gRPC reflection, so Nodeward can stop serving reflection on its public registration port (FCR 1649, FCR 1226). A Nodeward without the health service still passes, because its Unimplemented answer proves the server answers. The check is now named "Nodeward gRPC server answers".
+
 ## v1.8.4
 
 This release hardens the Kubernetes upgrade instruction against malformed version fields.

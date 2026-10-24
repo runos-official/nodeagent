@@ -10,7 +10,9 @@ import (
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection/grpc_reflection_v1alpha"
+	"google.golang.org/grpc/codes"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -27,12 +29,13 @@ This checks the live agent plumbing, not the host environment (that is what
 'runos preflight' is for). It verifies:
 
   - the L1Sec (TLS) connection to Nodeward can be established
-  - the Nodeward gRPC server answers a reflection request
+  - the Nodeward gRPC server answers a standard gRPC health check
   - control-plane nodes can be listed
   - a node log line can be written end to end
 
-The reflection check confirms Nodeward is serving; pass --verbose to also print
-every reflected service name.
+The health check confirms Nodeward is serving. A Nodeward that predates the
+health service answers Unimplemented, which still proves the server answers.
+Pass --verbose to also print the health status.
 
 Note: this command writes one test entry to the node log (visible in the
 console and 'runos logs') to verify the write path. It does not mutate any
@@ -51,7 +54,7 @@ health checks and shell "&&" chains.`,
 
 func init() {
 	RootCmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit results as a single JSON object to stdout")
-	RootCmd.Flags().BoolVar(&verbose, "verbose", false, "Print extra detail (e.g. every reflected service name)")
+	RootCmd.Flags().BoolVar(&verbose, "verbose", false, "Print extra detail (e.g. the Nodeward health status)")
 }
 
 // checkResult is one entry in the --json output's checks array.
@@ -135,20 +138,17 @@ func runTest() error {
 	defer conn.Close()
 	record("Backend connection (L1Sec)", nil, nil)
 
-	// 2. Nodeward serves gRPC reflection (proves the server is answering).
-	services, reflErr := listServices(ctx, conn)
-	record("Nodeward gRPC reflection", reflErr, &failure{
-		step:   "Query Nodeward gRPC reflection",
-		cause:  causeOf(reflErr),
-		remedy: "Nodeward is reachable but not answering gRPC reflection. Confirm the Nodeward service is healthy; if it persists, contact your operator.",
+	// 2. The Nodeward gRPC server answers. The probe is the standard health
+	// check, not reflection: the registration port serves no reflection
+	// (FCR 1649, FCR 1226).
+	answerErr := nodewardAnswers(ctx, conn)
+	record("Nodeward gRPC server answers", answerErr, &failure{
+		step:   "Check that Nodeward answers",
+		cause:  causeOf(answerErr),
+		remedy: "Nodeward is reachable but its gRPC server did not answer a health check. Confirm the Nodeward service is healthy; if it persists, contact your operator.",
 	})
-	if reflErr == nil && verbose && !jsonOutput {
-		if len(services) == 0 {
-			roslog.Printf("      (no services reported)\n")
-		}
-		for _, s := range services {
-			roslog.Printf("      service: %s\n", s)
-		}
+	if answerErr == nil && verbose && !jsonOutput {
+		roslog.Printf("      health: %s\n", lastHealth)
 	}
 
 	// 3. Control-plane nodes can be listed.
@@ -225,39 +225,27 @@ func printCheck(name string, ok bool, errStr string) {
 	}
 }
 
-// listServices issues a single ListServices reflection request and returns the
-// reflected service names.
-func listServices(ctx context.Context, conn grpc.ClientConnInterface) ([]string, error) {
-	client := grpc_reflection_v1alpha.NewServerReflectionClient(conn)
+// lastHealth is the health status the last probe read, for --verbose.
+var lastHealth = "unknown"
 
-	stream, err := client.ServerReflectionInfo(ctx)
+// nodewardAnswers proves that the Nodeward gRPC server answers. It sends a
+// standard gRPC health check. SERVING passes. Unimplemented also passes: a
+// Nodeward that predates the health service still answered as a gRPC
+// server. Any other answer, or no answer, fails.
+func nodewardAnswers(ctx context.Context, conn grpc.ClientConnInterface) error {
+	res, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	if status.Code(err) == codes.Unimplemented {
+		lastHealth = "no health service (older Nodeward), server answered"
+		return nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("could not open reflection stream: %w", err)
+		return fmt.Errorf("health check failed: %w", err)
 	}
-
-	if err := stream.Send(&grpc_reflection_v1alpha.ServerReflectionRequest{
-		MessageRequest: &grpc_reflection_v1alpha.ServerReflectionRequest_ListServices{
-			ListServices: "*",
-		},
-	}); err != nil {
-		return nil, fmt.Errorf("could not send reflection request: %w", err)
+	lastHealth = res.GetStatus().String()
+	if res.GetStatus() != healthpb.HealthCheckResponse_SERVING {
+		return fmt.Errorf("Nodeward reports %s", res.GetStatus())
 	}
-
-	resp, err := stream.Recv()
-	if err != nil {
-		return nil, fmt.Errorf("could not read reflection response: %w", err)
-	}
-
-	listResp := resp.GetListServicesResponse()
-	if listResp == nil {
-		return nil, fmt.Errorf("reflection response contained no service list")
-	}
-
-	names := make([]string, 0, len(listResp.Service))
-	for _, s := range listResp.Service {
-		names = append(names, s.Name)
-	}
-	return names, nil
+	return nil
 }
 
 func causeOf(err error) string {
