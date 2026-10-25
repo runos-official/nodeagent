@@ -12,6 +12,7 @@ as the GitHub release notes, so every released version needs a section here.
 ### Fixed
 
 - A reply larger than 16 MiB (minus a small margin) no longer ends the connection to Nodeward. The agent answers that one request with an `ERROR` reply that starts with `REPLY_TOO_LARGE` and names the size, the limit and the reply type, and the connection stays up. Before, Nodeward refused the message with ResourceExhausted and every call in flight on the connection failed (FCR 1288).
+- A control plane that has no `/etc/kubernetes/kubeadm-config.yaml` now answers a request for a control-plane join command with an error that names the missing file, instead of a generic failure that read like a network fault (FCR 1095). Nodeward now writes that file on every control plane it joins.
 
 ## v1.8.5
 
