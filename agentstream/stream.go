@@ -173,6 +173,10 @@ func processInstructions(ctx context.Context, workerID int, instructionChan <-ch
 			response := safeHandleInstructionWith(workerID, task.Instruction, handle)
 			<-instructionSlots
 
+			// One oversized reply must fail its own request only: Nodeward ends the
+			// whole stream on a message above its limit (FCR 1288).
+			response = boundReply(response)
+
 			// A nil response is an explicit "do not ack" signal (used by
 			// VIP_ASSIGN so Nodeward hands off to the next candidate on its
 			// 5s timeout).

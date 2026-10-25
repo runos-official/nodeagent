@@ -98,6 +98,11 @@ func SendToNodeward(msg *l2sec.FromNodeAgent) error {
 		msg.Tag = uuid.New().String()
 	}
 
+	if err := checkSendSize(msg); err != nil {
+		roslog.E("Refusing to send an oversized message to Nodeward", err, "type", msg.Type, "tag", msg.Tag)
+		return err
+	}
+
 	// Send the message
 	payloadBytes := len(msg.JsonB64)
 	err := globalStream.Send(msg)
@@ -121,6 +126,9 @@ func sendOnStream(ctx context.Context, stream l2sec.Nodeward_NodeAgentStreamClie
 	}
 	if msg.Tag == "" {
 		msg.Tag = uuid.New().String()
+	}
+	if err := checkSendSize(msg); err != nil {
+		return err
 	}
 	return stream.Send(msg)
 }

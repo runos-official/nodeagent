@@ -1,11 +1,14 @@
 package agentstream
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	pb "github.com/runos-official/nodeagent/l2sec"
 )
 
 // Goal 23 F5. `kubeadm init phase upload-certs --upload-certs` generates a FRESH key on every
@@ -92,4 +95,17 @@ func swapCertKeyPath(t *testing.T, path string) func() {
 	previous := certKeyPath
 	certKeyPath = path
 	return func() { certKeyPath = previous }
+}
+
+// FCR 1095: a control plane that joined has no kubeadm configuration file unless the join wrote
+// one. The reply must say so, not blame the network.
+func TestJoinCommandAsCpNamesAMissingKubeadmConfig(t *testing.T) {
+	old := kubeadmConfigPath
+	kubeadmConfigPath = filepath.Join(t.TempDir(), "kubeadm-config.yaml")
+	defer func() { kubeadmConfigPath = old }()
+
+	_, err := HandleGetClusterJoinCommand(&pb.ToNodeAgent{JsonB64: base64.StdEncoding.EncodeToString([]byte(`{"asCp":true}`))})
+	if err == nil || !strings.Contains(err.Error(), "kubeadm-config.yaml") {
+		t.Fatalf("error = %v, want one that names the missing kubeadm-config.yaml", err)
+	}
 }

@@ -57,6 +57,12 @@ func HandleGetClusterJoinCommand(instruction *pb.ToNodeAgent) (*pb.FromNodeAgent
 
 	//var joinCmd string
 	if request.AsCp {
+		// The certificate upload runs with the cluster's kubeadm configuration (see getCertKey).
+		// A control plane that joined has none unless the join wrote one. Say so, so the
+		// caller does not read a missing file as a network fault (FCR 1095).
+		if _, statErr := os.Stat(kubeadmConfigPath); statErr != nil {
+			return nil, fmt.Errorf("this control plane has no %s, so it cannot upload the control-plane certificates for a join: %v", kubeadmConfigPath, statErr)
+		}
 		response.JoinCmd = getClusterJoinCommandAsCp()
 		if response.JoinCmd == "" {
 			return nil, fmt.Errorf("could not upload the control-plane certificates or generate a join command")
