@@ -7,20 +7,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
-## Unreleased
-
-### Added
-
-- `installer/node-install.sh`, the node installer, now lives in this repository. It is a
-  static file: the RunOS API serves it unchanged, and the install command passes the API
-  host, the account, the registration token and an optional version as arguments. The
-  script checks the shape of every argument before it runs any command, and writes the API
-  host into `client.server.conductor`, so a new node no longer derives its conductor host
-  from the installer host. The agent binary does not change.
-
 ## v1.8.5
 
-This release stops `runos update` from moving a node to an older release.
+This release is a security release. The agent refuses to move to an older release, the build moves to a supported Go toolchain and patched dependencies, `runos test` proves the Nodeward health check, and the node installer now lives in this repository as a static file.
 
 ### Security
 
@@ -33,6 +22,11 @@ This release stops `runos update` from moving a node to an older release.
 - Dependencies with known, reachable vulnerabilities move to fixed releases: golang.org/x/net v0.23.0 to v0.60.0 (HTTP/2 server and transport fixes), google.golang.org/grpc v1.64.0 to v1.83.2 (HTTP/2 DATA frame memory exhaustion, and in v1.83.2 a server panic on a missing authority header), golang.org/x/text to v0.42.0 and gorilla/websocket to v1.5.3. grpc 1.83 needs Go 1.26 language mode, so go.mod now declares go 1.26.0. govulncheck reports no vulnerabilities (FCR 1671).
 - The agent builds with Go 1.26.10 (go.mod toolchain line). v1.8.5-rc.2 and earlier built with Go 1.22.0, a line without security fixes; 1.26.10 carries the standard-library fixes, including the HTTP/2 SETTINGS denial of service (CVE-2026-78669) (FCR 1654).
 - `runos test` proves that Nodeward answers with a standard gRPC health check instead of gRPC reflection, so Nodeward can stop serving reflection on its public registration port (FCR 1649, FCR 1226). A Nodeward without the health service still passes, because its Unimplemented answer proves the server answers. The check is now named "Nodeward gRPC server answers".
+
+### Added
+
+- `installer/node-install.sh`, the node installer, now lives in this repository. It is a static file: the RunOS API serves it unchanged, and the install command passes the API host, the account, the registration token and an optional version as arguments. The script checks the shape of every argument before it runs any command, and it writes the API host into `client.server.conductor`, so a new node no longer derives its conductor host from the installer host.
+- The installer refuses any release below the security floor (v1.8.4) and installs an exact release, a hidden release candidate included, when the install command passes `--version`. It verifies the binary against that release's own `checksums.txt`. The agent binary is the same as v1.8.5-rc.5.
 
 ## v1.8.4
 
