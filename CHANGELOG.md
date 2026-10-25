@@ -7,6 +7,12 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## Unreleased
+
+### Fixed
+
+- A reply larger than 16 MiB (minus a small margin) no longer ends the connection to Nodeward. The agent answers that one request with an `ERROR` reply that starts with `REPLY_TOO_LARGE` and names the size, the limit and the reply type, and the connection stays up. Before, Nodeward refused the message with ResourceExhausted and every call in flight on the connection failed (FCR 1288).
+
 ## v1.8.5
 
 This release is a security release. The agent refuses to move to an older release, the build moves to a supported Go toolchain and patched dependencies, `runos test` proves the Nodeward health check, and the node installer now lives in this repository as a static file.
