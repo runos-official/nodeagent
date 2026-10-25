@@ -7,6 +7,17 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## Unreleased
+
+### Added
+
+- `installer/node-install.sh`, the node installer, now lives in this repository. It is a
+  static file: the RunOS API serves it unchanged, and the install command passes the API
+  host, the account, the registration token and an optional version as arguments. The
+  script checks the shape of every argument before it runs any command, and writes the API
+  host into `client.server.conductor`, so a new node no longer derives its conductor host
+  from the installer host. The agent binary does not change.
+
 ## v1.8.5
 
 This release stops `runos update` from moving a node to an older release.

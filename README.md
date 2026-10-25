@@ -55,6 +55,19 @@ The agent ships as attested Linux binaries on
 installer downloads the exact release the control plane has selected and verifies
 its checksum before installing it to `/usr/local/bin/runos`.
 
+The installer script is [installer/node-install.sh](installer/node-install.sh). It is
+a static file: the RunOS API serves it unchanged at `/install/node.sh`, and the
+install command passes the API host, the account, the registration token and an
+optional version as arguments:
+
+```bash
+curl -fsSL https://api.runos.com/install/node.sh | sudo bash -s -- \
+  --api https://api.runos.com --account <account> --token <token>
+```
+
+The script checks the shape of every argument before it runs any command, and it
+writes the API host into `client.server.conductor`.
+
 ## Updating
 
 ```bash
