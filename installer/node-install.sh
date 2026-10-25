@@ -10,6 +10,11 @@
 #     --api https://api.runos.com --account <account id> --token <registration token> \
 #     [--version <node agent version>]
 #
+# --version installs that exact release, a hidden release candidate included (for example
+# --version 1.8.5-rc.5). The binary is verified against that release's own checksums.txt.
+# Without --version the script installs the version conductor advertises for the account.
+# The join command that conductor generates passes the cluster's pinned version as --version.
+#
 # The script runs as root, so it checks the shape of every argument BEFORE it runs any command.
 # A value of the wrong shape stops the script with exit code 2 and nothing runs. The values that
 # conductor returns at run time (the version, the nodeward host, the CDN base) are checked the
@@ -74,12 +79,35 @@ API_RE="^https://${HOST_RE}\$"
 NODEWARD_RE="^${HOST_RE}\$"
 CDN_RE="^https://${HOST_RE}(/[A-Za-z0-9._~-]+)*\$"
 
+# The security floor: no release below it is ever installed (FCR 1650). It must equal
+# MinimumVersion in uc/install/version_floor.go; a test keeps the two in step. A pre-release
+# of the floor itself (1.8.4-rc.1) sorts below the floor and is refused. Any exact release or
+# hidden release candidate above the floor (for example 1.8.5-rc.5) is installed exactly.
+MIN_VERSION="1.8.4"
+
+# below_floor succeeds when the release version $1 sorts below MIN_VERSION. Builtins only.
+below_floor() {
+    local core="${1%%-*}" pre="" IFS=. a b i
+    [ "$core" != "$1" ] && pre="1"
+    # Both values are checked digits and dots, so word splitting on "." is safe here.
+    # shellcheck disable=SC2206
+    a=( $core )
+    # shellcheck disable=SC2206
+    b=( $MIN_VERSION )
+    for i in 0 1 2; do
+        if [ $((10#${a[$i]})) -lt $((10#${b[$i]})) ]; then return 0; fi
+        if [ $((10#${a[$i]})) -gt $((10#${b[$i]})) ]; then return 1; fi
+    done
+    [ -n "$pre" ]
+}
+
 [[ "$SECURITY_TOKEN" =~ $TOKEN_RE ]] || refuse "the --token value is missing or malformed (expected 64 letters and digits)"
 [[ "$ACCOUNT_ID" =~ $ACCOUNT_RE ]] || refuse "the --account value is missing or malformed (expected 5 lowercase letters or digits)"
 [[ "$API_URL" =~ $API_RE ]] || refuse "the --api value is missing or malformed (expected https://<host>)"
 if [ -n "$VERSION" ]; then
     VERSION="${VERSION#v}"
     [[ "$VERSION" =~ $VERSION_RE ]] || refuse "the --version value is malformed (expected a release version such as 1.2.3)"
+    below_floor "$VERSION" && refuse "the --version value is below the security floor ${MIN_VERSION}"
 fi
 
 if [ "$(id -u)" != "0" ]; then
@@ -218,6 +246,9 @@ if [ -z "$VERSION" ]; then
         fail "Read the node agent version (no version is advertised for this account)" 1
     fi
     [[ "$VERSION" =~ $VERSION_RE ]] || fail "Check the advertised node agent version (malformed answer)" 1
+    if below_floor "$VERSION"; then
+        fail "Check the advertised node agent version (${VERSION} is below the security floor ${MIN_VERSION})" 1
+    fi
 fi
 
 # The node agent ships as attested binaries on GitHub Releases. Download the
