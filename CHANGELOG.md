@@ -7,6 +7,14 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## Unreleased
+
+### Fixed
+
+- A shell command that exits quickly now always returns all of its output. The two runners that watch a command for silence (package-manager commands and the install steps) read the output in one goroutine while another called `Wait`, and `Wait` closes the pipes, so a fast command could return an empty string ("read |0: file already closed"). The Kubernetes node upgrade then read the installed containerd as empty and ran a needless containerd install (FCR 1661). Output now goes straight into one collector that `Wait` drains before it returns.
+- A command that prints one line longer than 64 KiB is no longer killed as hung: the old line reader stopped at that size, stopped draining the pipe, and the command blocked until the silence timer fired.
+- Output of the two runners now keeps the order the command wrote its standard output and standard error in (before, all standard output came first).
+
 ## v1.8.6
 
 ### Fixed
