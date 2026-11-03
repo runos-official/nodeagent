@@ -358,107 +358,18 @@ func executeCommandWithActivityTimeout(command string, inactivityTimeout time.Du
 			roslog.I("Retrying command", "attempt", attempt, "maxRetries", maxRetries, "command", redactSecrets(command))
 		}
 
-		// Create context that we can cancel
-		ctx, cancel := context.WithCancel(context.Background())
-
-		// Create command with context
-		systemCmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
-		// Set process group so we can kill all child processes
-		systemCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-		// Get stdout and stderr pipes
-		stdoutPipe, err := systemCmd.StdoutPipe()
-		if err != nil {
-			cancel()
-			return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+		output, runErr, timedOut, startErr := runAttempt(command, inactivityTimeout, nil, func() {
+			roslog.E("Command timed out due to inactivity", fmt.Errorf("no output for %v", inactivityTimeout))
+		})
+		if startErr != nil {
+			return "", fmt.Errorf("failed to start command: %w", startErr)
 		}
-		stderrPipe, err := systemCmd.StderrPipe()
-		if err != nil {
-			cancel()
-			return "", fmt.Errorf("failed to create stderr pipe: %w", err)
+		lastOutput = output
+		if timedOut {
+			lastErr = fmt.Errorf("%w (no output for %v)", ErrCommandHung, inactivityTimeout)
+		} else {
+			lastErr = runErr
 		}
-
-		// Start the command
-		if err := systemCmd.Start(); err != nil {
-			cancel()
-			return "", fmt.Errorf("failed to start command: %w", err)
-		}
-
-		// Channel to signal activity (any output received)
-		activityCh := make(chan struct{}, 100)
-		// Channel to collect output
-		outputCh := make(chan string, 1)
-		// Channel for errors
-		errCh := make(chan error, 1)
-
-		// Goroutine to read output and signal activity
-		go func() {
-			var output strings.Builder
-			readers := io.MultiReader(stdoutPipe, stderrPipe)
-			scanner := bufio.NewScanner(readers)
-
-			for scanner.Scan() {
-				line := scanner.Text()
-				output.WriteString(line)
-				output.WriteString("\n")
-				// Signal activity
-				select {
-				case activityCh <- struct{}{}:
-				default:
-				}
-			}
-
-			if err := scanner.Err(); err != nil {
-				roslog.E("Error reading command output", err)
-			}
-
-			outputCh <- output.String()
-		}()
-
-		// Goroutine to wait for command completion
-		go func() {
-			errCh <- systemCmd.Wait()
-		}()
-
-		// Monitor activity with timeout
-		timer := time.NewTimer(inactivityTimeout)
-		commandCompleted := false
-
-		for !commandCompleted {
-			select {
-			case <-activityCh:
-				// Reset timer on any activity
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(inactivityTimeout)
-
-			case <-timer.C:
-				// No activity for inactivityTimeout duration - kill the process
-				roslog.E("Command timed out due to inactivity", fmt.Errorf("no output for %v", inactivityTimeout))
-				// Kill the entire process group (including child processes)
-				if systemCmd.Process != nil {
-					// Negative PID kills the entire process group
-					syscall.Kill(-systemCmd.Process.Pid, syscall.SIGKILL)
-				}
-				cancel() // Also cancel the context
-				// Wait for the process to actually terminate before reading output
-				<-errCh
-				lastOutput = <-outputCh
-				lastErr = fmt.Errorf("%w (no output for %v)", ErrCommandHung, inactivityTimeout)
-				commandCompleted = true
-
-			case err := <-errCh:
-				// Command completed
-				timer.Stop()
-				lastOutput = <-outputCh
-				lastErr = err
-				commandCompleted = true
-			}
-		}
-
-		// Clean up context
-		cancel()
 
 		// If command succeeded, return immediately
 		if lastErr == nil {
@@ -638,121 +549,27 @@ func executeCommandWithActivityTimeoutInstall(command string, inactivityTimeout 
 			roslog.InstallWarning(fmt.Sprintf("Retrying command (attempt %d/%d)", attempt, maxRetries))
 		}
 
-		// Create context that we can cancel
-		ctx, cancel := context.WithCancel(context.Background())
-
-		// Create command with context
-		systemCmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
-		// Set process group so we can kill all child processes
-		systemCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-		// Get stdout and stderr pipes
-		stdoutPipe, err := systemCmd.StdoutPipe()
-		if err != nil {
-			cancel()
-			return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+		// Each output line advances the progress spinner and counts as activity.
+		output, runErr, timedOut, startErr := runAttempt(command, inactivityTimeout, roslog.ShowInstallActivity, func() {
+			roslog.InstallWarning(fmt.Sprintf("Command timed out (no output for %v)", inactivityTimeout))
+		})
+		if startErr != nil {
+			return "", fmt.Errorf("failed to start command: %w", startErr)
 		}
-		stderrPipe, err := systemCmd.StderrPipe()
-		if err != nil {
-			cancel()
-			return "", fmt.Errorf("failed to create stderr pipe: %w", err)
-		}
-
-		// Start the command
-		if err := systemCmd.Start(); err != nil {
-			cancel()
-			return "", fmt.Errorf("failed to start command: %w", err)
-		}
-
-		// Channel to signal activity (any output received)
-		activityCh := make(chan struct{}, 100)
-		// Channel to collect output
-		outputCh := make(chan string, 1)
-		// Channel for errors
-		errCh := make(chan error, 1)
-
-		// Goroutine to read output and signal activity
-		go func() {
-			var output strings.Builder
-			readers := io.MultiReader(stdoutPipe, stderrPipe)
-			scanner := bufio.NewScanner(readers)
-
-			for scanner.Scan() {
-				line := scanner.Text()
-				output.WriteString(line)
-				output.WriteString("\n")
-
-				// Show activity in progress bar (advance spinner)
-				roslog.ShowInstallActivity()
-
-				// Signal activity
-				select {
-				case activityCh <- struct{}{}:
-				default:
-				}
+		lastOutput = output
+		switch {
+		case timedOut:
+			tail := lastNLines(lastOutput, 10)
+			if tail == "" {
+				lastErr = fmt.Errorf("%w (no output for %v); produced no output before silence", ErrCommandHung, inactivityTimeout)
+			} else {
+				lastErr = fmt.Errorf("%w (no output for %v); last lines before silence:\n  %s", ErrCommandHung, inactivityTimeout, tail)
 			}
-
-			if err := scanner.Err(); err != nil {
-				// Only log scanner errors in debug mode during install
-				roslog.InstallDebug(fmt.Sprintf("Scanner error: %v", err))
-			}
-
-			outputCh <- output.String()
-		}()
-
-		// Goroutine to wait for command completion
-		go func() {
-			errCh <- systemCmd.Wait()
-		}()
-
-		// Monitor activity with timeout
-		timer := time.NewTimer(inactivityTimeout)
-		commandCompleted := false
-
-		for !commandCompleted {
-			select {
-			case <-activityCh:
-				// Reset timer on any activity
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(inactivityTimeout)
-
-			case <-timer.C:
-				// No activity for inactivityTimeout duration - kill the process
-				roslog.InstallWarning(fmt.Sprintf("Command timed out (no output for %v)", inactivityTimeout))
-				// Kill the entire process group (including child processes)
-				if systemCmd.Process != nil {
-					// Negative PID kills the entire process group
-					syscall.Kill(-systemCmd.Process.Pid, syscall.SIGKILL)
-				}
-				cancel() // Also cancel the context
-				// Wait for the process to actually terminate before reading output
-				<-errCh
-				lastOutput = <-outputCh
-				tail := lastNLines(lastOutput, 10)
-				if tail == "" {
-					lastErr = fmt.Errorf("%w (no output for %v); produced no output before silence", ErrCommandHung, inactivityTimeout)
-				} else {
-					lastErr = fmt.Errorf("%w (no output for %v); last lines before silence:\n  %s", ErrCommandHung, inactivityTimeout, tail)
-				}
-				commandCompleted = true
-
-			case err := <-errCh:
-				// Command completed
-				timer.Stop()
-				lastOutput = <-outputCh
-				if err != nil {
-					lastErr = describeExitError(err)
-				} else {
-					lastErr = nil
-				}
-				commandCompleted = true
-			}
+		case runErr != nil:
+			lastErr = describeExitError(runErr)
+		default:
+			lastErr = nil
 		}
-
-		// Clean up context
-		cancel()
 
 		// If command succeeded, return immediately
 		if lastErr == nil {
