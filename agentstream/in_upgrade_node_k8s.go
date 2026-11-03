@@ -138,6 +138,35 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 		return failUpgrade(progress, previous, tag, "apt-get update failed: %v (%s)", err, tailOutput(out, 500)), nil
 	}
 
+	// The node install holds containerd, cri-tools and kubernetes-cni (FCR 933),
+	// so a plain apt-get upgrade cannot move them. This upgrade is the explicit
+	// operation that may: release them for the package steps below and hold them
+	// again afterwards, on success and on every failure path.
+	sendUpgradeLog(progress, "Releasing the apt hold on containerd, cri-tools and kubernetes-cni for the upgrade", 1)
+	if out, err := upgradeRunShell(commons.AptMarkInstalledCommand("unhold", commons.UpgradeMovedPackages)); err != nil {
+		return failUpgrade(progress, previous, tag, "apt-mark unhold runtime packages failed: %v (%s)", err, tailOutput(out, 500)), nil
+	}
+	runtimeHeld := false
+	holdRuntime := func() error {
+		if runtimeHeld {
+			return nil
+		}
+		out, err := upgradeRunShell(commons.AptMarkInstalledCommand("hold", commons.UpgradeMovedPackages))
+		if err != nil {
+			return fmt.Errorf("apt-mark hold runtime packages failed: %v (%s)", err, tailOutput(out, 500))
+		}
+		runtimeHeld = true
+		return nil
+	}
+	// Safety net: a failure anywhere below must not leave the runtime packages
+	// open to a later apt-get upgrade. The result of the upgrade is already
+	// decided, so a failure here is only logged.
+	defer func() {
+		if err := holdRuntime(); err != nil {
+			sendUpgradeLog(progress, err.Error(), 3)
+		}
+	}()
+
 	sendUpgradeLog(progress, fmt.Sprintf("Installing kubeadm %s", req.TargetKubernetesVersion), 1)
 	if out, err := upgradeRunShell("apt-mark unhold kubeadm"); err != nil {
 		return failUpgrade(progress, previous, tag, "apt-mark unhold kubeadm failed: %v (%s)", err, tailOutput(out, 500)), nil
@@ -202,6 +231,9 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 		}
 	} else {
 		sendUpgradeLog(progress, fmt.Sprintf("containerd already at %s", req.TargetContainerdVersion), 1)
+	}
+	if err := holdRuntime(); err != nil {
+		return failUpgrade(progress, previous, tag, "%v", err), nil
 	}
 
 	currentHelm := getCurrentHelmVersion()

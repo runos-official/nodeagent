@@ -9,6 +9,11 @@ as the GitHub release notes, so every released version needs a section here.
 
 ## Unreleased
 
+### Changed
+
+- The Kubernetes node upgrade releases the apt hold on containerd, cri-tools and kubernetes-cni before it installs packages, and holds them again afterwards, also when the upgrade fails half way. Nodeward is about to hold these packages at node install so that a plain `apt-get upgrade` cannot move them (FCR 933); the upgrade is the explicit operation that may. Only packages that are installed are held or released. Release this agent before that Nodeward change reaches new nodes.
+- `runos uninstall` releases the apt hold on every package the node install holds (containerd, haproxy, dnsmasq, wireguard-tools, cri-tools, kubernetes-cni besides kubelet, kubeadm and kubectl), so the package purge cannot be refused by a held package.
+
 ### Fixed
 
 - A shell command that exits quickly now always returns all of its output. The two runners that watch a command for silence (package-manager commands and the install steps) read the output in one goroutine while another called `Wait`, and `Wait` closes the pipes, so a fast command could return an empty string ("read |0: file already closed"). The Kubernetes node upgrade then read the installed containerd as empty and ran a needless containerd install (FCR 1661). Output now goes straight into one collector that `Wait` drains before it returns.
