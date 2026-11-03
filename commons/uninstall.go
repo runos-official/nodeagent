@@ -2,6 +2,7 @@ package commons
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/runos-official/nodeagent/roslog"
 )
@@ -222,6 +223,14 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 	}
 }
 
+// unholdRunosPackagesCommand is the best-effort command that releases the apt
+// hold on every package the node install holds. It loops so one unknown or
+// already unheld name cannot stop the rest, and always exits 0.
+func unholdRunosPackagesCommand() string {
+	all := append(append([]string{}, KubernetesHeldPackages...), RuntimeHeldPackages...)
+	return "for p in " + strings.Join(all, " ") + "; do apt-mark unhold \"$p\" >/dev/null 2>&1 || true; done"
+}
+
 // step runs a best-effort cleanup command. Its raw output is sent to the durable
 // log only (via ExecuteCommandGetResponse -> roslog.I), never dumped to the
 // terminal. Best-effort steps are not load-bearing: their failure does not make
@@ -424,8 +433,10 @@ func Uninstall(full bool) error {
 
 	// --- Packages (load-bearing) -------------------------------------------
 	roslog.Print("Removing packages... ")
-	// Unhold the held Kubernetes packages so they can be purged (best-effort).
-	step("apt-mark unhold kubelet kubeadm kubectl || true")
+	// Unhold every package the node install holds so apt can purge them
+	// (best-effort; a held package makes the purge below fail). FCR 933 added the
+	// runtime packages to the Kubernetes trio.
+	step(unholdRunosPackagesCommand())
 	// Purge ALL RunOS-installed packages in a SINGLE non-interactive apt-get (was
 	// five separate, slow, lock-contending invocations — the long delay). Bounded
 	// by the dpkg-lock timeout above plus an overall `timeout`.

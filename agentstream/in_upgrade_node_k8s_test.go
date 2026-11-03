@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/runos-official/nodeagent/commons"
 	pb "github.com/runos-official/nodeagent/l2sec"
 )
 
@@ -173,6 +174,7 @@ func TestUpgradeNodeK8sRunsTheExpectedCommandsForAValidRequest(t *testing.T) {
 		"argv: gpg [--batch] [--yes] [--dearmor] [-o] [/etc/apt/keyrings/kubernetes-apt-keyring.gpg] [/tmp/kubernetes-release.key]",
 		"write: /etc/apt/sources.list.d/kubernetes.list",
 		"sh: apt-get update",
+		"sh: " + commons.AptMarkInstalledCommand("unhold", commons.UpgradeMovedPackages),
 		"sh: apt-mark unhold kubeadm",
 		"sh: apt-get install -y 'kubeadm=1.35.9-*'",
 		"sh: apt-mark hold kubeadm",
@@ -182,6 +184,7 @@ func TestUpgradeNodeK8sRunsTheExpectedCommandsForAValidRequest(t *testing.T) {
 		"sh: apt-mark hold kubelet kubectl",
 		"sh: dpkg-query -W -f='${Version}' containerd",
 		"sh: apt-get install -y 'containerd=2.2.2-*'",
+		"sh: " + commons.AptMarkInstalledCommand("hold", commons.UpgradeMovedPackages),
 		"sh: helm version --short --client",
 		"sh: curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | DESIRED_VERSION='v3.22.1' bash",
 		"sh: systemctl daemon-reload && systemctl restart kubelet",
@@ -251,3 +254,125 @@ func init() {
 	// No test may wait on a real clock.
 	upgradeSleep = func(time.Duration) {}
 }
+
+// FCR 933: node install holds containerd, cri-tools and kubernetes-cni, so the
+// explicit Kubernetes upgrade must release them before it installs and hold
+// them again afterwards.
+func TestUpgradeNodeK8sReleasesAndRestoresTheRuntimeHolds(t *testing.T) {
+	rec := &upgradeRecorder{target: "1.35.9"}
+	rec.install(t)
+	req := validUpgradeRequest()
+	req.TargetContainerdVersion = "2.2.2"
+
+	resp, _ := handleUpgradeNodeK8s(upgradeInstruction(t, req), &ProgressTagger{})
+	if !upgradeResult(t, resp).Success {
+		t.Fatalf("upgrade failed: %+v", upgradeResult(t, resp))
+	}
+	unhold := "sh: " + commons.AptMarkInstalledCommand("unhold", commons.UpgradeMovedPackages)
+	hold := "sh: " + commons.AptMarkInstalledCommand("hold", commons.UpgradeMovedPackages)
+	idx := func(want string) []int {
+		var at []int
+		for i, c := range rec.commands {
+			if c == want {
+				at = append(at, i)
+			}
+		}
+		return at
+	}
+	firstInstall := -1
+	containerdInstall := -1
+	for i, c := range rec.commands {
+		if strings.HasPrefix(c, "sh: apt-get install") && firstInstall < 0 {
+			firstInstall = i
+		}
+		if strings.HasPrefix(c, "sh: apt-get install -y 'containerd=") {
+			containerdInstall = i
+		}
+	}
+	u, h := idx(unhold), idx(hold)
+	if len(u) != 1 || len(h) != 1 {
+		t.Fatalf("want one unhold and one hold, got %d and %d in %q", len(u), len(h), rec.commands)
+	}
+	if !(u[0] < firstInstall) {
+		t.Errorf("the hold must be released before the first apt-get install (unhold %d, install %d)", u[0], firstInstall)
+	}
+	if !(h[0] > containerdInstall) {
+		t.Errorf("the hold must come back after the containerd install (hold %d, install %d)", h[0], containerdInstall)
+	}
+}
+
+// A containerd that is already at the target still gets its hold back.
+func TestUpgradeNodeK8sHoldsAgainWhenContainerdIsAlreadyAtTarget(t *testing.T) {
+	rec := &upgradeRecorder{target: "1.35.9"}
+	rec.install(t)
+	req := validUpgradeRequest() // containerd 2.2.1 equals the recorder's installed 2.2.1
+	resp, _ := handleUpgradeNodeK8s(upgradeInstruction(t, req), &ProgressTagger{})
+	if !upgradeResult(t, resp).Success {
+		t.Fatalf("upgrade failed: %+v", upgradeResult(t, resp))
+	}
+	hold := "sh: " + commons.AptMarkInstalledCommand("hold", commons.UpgradeMovedPackages)
+	for _, c := range rec.commands {
+		if strings.HasPrefix(c, "sh: apt-get install -y 'containerd=") {
+			t.Fatalf("containerd must not be installed when already at target: %q", rec.commands)
+		}
+	}
+	found := false
+	for _, c := range rec.commands {
+		found = found || c == hold
+	}
+	if !found {
+		t.Errorf("hold missing in %q", rec.commands)
+	}
+}
+
+// A failure in the middle of the upgrade must not leave the runtime packages
+// open: the hold comes back on the way out.
+func TestUpgradeNodeK8sRestoresTheHoldWhenTheUpgradeFails(t *testing.T) {
+	rec := &upgradeRecorder{target: "1.35.9"}
+	rec.install(t)
+	record := upgradeRunShell
+	upgradeRunShell = func(c string) (string, error) {
+		if strings.Contains(c, "apt-get install -y 'kubeadm=") {
+			rec.commands = append(rec.commands, "sh: "+c)
+			return "E: unable to locate package", errFakeApt
+		}
+		return record(c)
+	}
+	resp, _ := handleUpgradeNodeK8s(upgradeInstruction(t, validUpgradeRequest()), &ProgressTagger{})
+	if upgradeResult(t, resp).Success {
+		t.Fatal("expected the upgrade to fail")
+	}
+	hold := "sh: " + commons.AptMarkInstalledCommand("hold", commons.UpgradeMovedPackages)
+	if last := rec.commands[len(rec.commands)-1]; last != hold {
+		t.Fatalf("the last command must put the hold back, got %q", last)
+	}
+}
+
+// If the hold cannot be released the upgrade stops before it installs anything.
+func TestUpgradeNodeK8sStopsWhenTheHoldCannotBeReleased(t *testing.T) {
+	rec := &upgradeRecorder{target: "1.35.9"}
+	rec.install(t)
+	record := upgradeRunShell
+	upgradeRunShell = func(c string) (string, error) {
+		if strings.Contains(c, "apt-mark unhold \"$p\"") {
+			rec.commands = append(rec.commands, "sh: "+c)
+			return "E: boom", errFakeApt
+		}
+		return record(c)
+	}
+	resp, _ := handleUpgradeNodeK8s(upgradeInstruction(t, validUpgradeRequest()), &ProgressTagger{})
+	if upgradeResult(t, resp).Success {
+		t.Fatal("expected the upgrade to fail")
+	}
+	for _, c := range rec.commands {
+		if strings.HasPrefix(c, "sh: apt-get install") {
+			t.Fatalf("nothing may be installed after a failed unhold: %q", rec.commands)
+		}
+	}
+}
+
+type fakeAptError struct{}
+
+func (fakeAptError) Error() string { return "exit status 100" }
+
+var errFakeApt error = fakeAptError{}
