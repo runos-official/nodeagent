@@ -20,16 +20,22 @@
 #                    fail closed on secret-shaped content in the deploy payload).
 #   2. Code gates  - leak and scannability gates (PUBLIC repo), formatting,
 #                    go build ./..., go vet ./..., go test ./...
-#   3. Deploy      - tag the dev commit and push the tag + dev. main is NOT
-#                    touched (the human merges main after personal verification).
+#   3. Deploy      - tag the dev commit and push the tag + dev. The record
+#                    branches are not touched until step 6.
 #   4. CI watch    - wait for the Release workflow run for this tag to succeed.
 #   5. Attest      - download a published binary and verify its build-provenance
 #                    attestation is bound to release.yml @ refs/tags/<VERSION>.
-#   6. Record      - only after a successful deploy, fast-forward the `deployed`
-#                    branch to the shipped commit and push it.
+#   6. Record      - only after a successful deploy, through
+#                    scripts/record-release.sh: a candidate fast-forwards the
+#                    `deployed` branch to the shipped commit. A FINAL
+#                    fast-forwards `deployed` and then `main`, the prod record, to
+#                    the commit its tag names. Fast-forward only: a diverged
+#                    branch is refused and nothing is forced.
 #
-# Branch model: dev = local development; deployed = what has shipped (advanced by
-# this script on success); main = human-controlled, never touched here.
+# Branch model: dev = local development; deployed = the last commit that was
+# tagged, candidate or final (advanced by this script on success); main = the
+# prod record, moved only by a final, to the final's commit. A final also needs
+# main to be an ancestor of dev, which the preflight checks before any tag exists.
 #
 # A tag containing "-" (e.g. v0.24.0-rc.1) publishes a HIDDEN release candidate:
 # a GitHub prerelease, pinnable by exact version, excluded from "Latest release".
@@ -41,6 +47,7 @@ set -euo pipefail
 # ---- constants -------------------------------------------------------------
 INTEGRATION_BRANCH="dev"     # where work lands; gates run here; this commit is tagged
 DEPLOYED_BRANCH="deployed"   # fast-forwarded to the shipped commit after a successful deploy
+PROD_BRANCH="main"           # the prod record: a final fast-forwards it, a candidate never does
 RELEASE_WORKFLOW="release.yml"
 ATTEST_ASSET="nodeagent-linux-amd64"  # representative raw binary for the attestation check
 CI_POLL_SECONDS=10
@@ -100,8 +107,8 @@ ok "CHANGELOG has a $CHANGELOG_VERSION section"
 # Working tree must be clean.
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty; commit or stash first"
 
-# dev must exist and be in sync with origin. main is intentionally NOT inspected:
-# this script never touches it.
+# dev must exist and be in sync with origin. main is inspected only for a final,
+# below: a candidate never touches it.
 git fetch --quiet origin "$INTEGRATION_BRANCH"
 git rev-parse -q --verify "refs/heads/$INTEGRATION_BRANCH" >/dev/null || die "missing local branch: $INTEGRATION_BRANCH"
 [[ "$(git rev-parse "$INTEGRATION_BRANCH")" == "$(git rev-parse "origin/$INTEGRATION_BRANCH")" ]] || \
@@ -124,6 +131,16 @@ if [[ "$DEPLOYED_EXISTS" == "true" ]]; then
   ok "dev clean & synced; $DEPLOYED_BRANCH present and fast-forwardable to dev"
 else
   ok "dev clean & synced; $DEPLOYED_BRANCH will be created on first deploy"
+fi
+
+# A final fast-forwards main, so main must already be an ancestor of dev. Refusing
+# here, before the tag, leaves no tag and no release behind when main has diverged.
+if [[ "$VERSION" != *-* ]]; then
+  git fetch --quiet origin "+refs/heads/$PROD_BRANCH:refs/remotes/origin/$PROD_BRANCH" || \
+    die "cannot fetch $PROD_BRANCH from origin; a final fast-forwards it"
+  git merge-base --is-ancestor "origin/$PROD_BRANCH" "$INTEGRATION_BRANCH" || \
+    die "origin/$PROD_BRANCH is not an ancestor of $INTEGRATION_BRANCH, so $VERSION could not fast-forward it. Merge $PROD_BRANCH into $INTEGRATION_BRANCH first."
+  ok "$PROD_BRANCH is an ancestor of $INTEGRATION_BRANCH: $VERSION can fast-forward it"
 fi
 
 # Base for the deploy payload = last shipped point: the `deployed` branch if it
@@ -255,7 +272,7 @@ if [[ "$CHECK_ONLY" == "true" ]]; then
 fi
 
 # =============================================================================
-# 3. Deploy: tag the dev commit and push (main is NOT touched)
+# 3. Deploy: tag the dev commit and push (the record moves in step 6)
 # =============================================================================
 step "Deploy: tag $VERSION on $INTEGRATION_BRANCH"
 git checkout --quiet "$INTEGRATION_BRANCH"
@@ -263,7 +280,7 @@ RELEASE_SHA="$(git rev-parse --short HEAD)"
 git tag "$VERSION"
 git push --quiet origin "$INTEGRATION_BRANCH"
 git push --quiet origin "$VERSION"
-ok "tagged $VERSION at $RELEASE_SHA, pushed $INTEGRATION_BRANCH + tag (main untouched)"
+ok "tagged $VERSION at $RELEASE_SHA, pushed $INTEGRATION_BRANCH + tag (the record moves in step 6)"
 
 # =============================================================================
 # 4. Watch the Release workflow run for this tag
@@ -305,20 +322,25 @@ ACTUAL_SAN="$(gh attestation verify "$TMP/$ATTEST_ASSET" --repo "$NWO" --format 
 ok "attestation bound to $ACTUAL_SAN"
 
 # =============================================================================
-# 6. Record: advance `deployed` to the shipped commit (only now, on success)
+# 6. Record: fast-forward `deployed`, and for a final `main`, to the shipped commit
 # =============================================================================
-step "Recording deploy: fast-forward $DEPLOYED_BRANCH to $RELEASE_SHA"
-git branch -f "$DEPLOYED_BRANCH" "$INTEGRATION_BRANCH"
-git push --quiet origin "$DEPLOYED_BRANCH"
-ok "$DEPLOYED_BRANCH now at $RELEASE_SHA"
+if [[ "$VERSION" == *-* ]]; then
+  RELEASE_ENV="dev";  RECORD_BRANCH="$DEPLOYED_BRANCH"
+else
+  RELEASE_ENV="prod"; RECORD_BRANCH="$PROD_BRANCH"
+fi
+step "Recording the release ($RELEASE_ENV record: $RECORD_BRANCH)"
+"$REPO_ROOT/scripts/record-release.sh" advance "$VERSION" "$RELEASE_ENV" "$INTEGRATION_BRANCH" "$RECORD_BRANCH" || \
+  die "the release is published but the record did not move; fix the branch named above and run: scripts/record-release.sh advance $VERSION $RELEASE_ENV $INTEGRATION_BRANCH $RECORD_BRANCH"
+ok "recorded $VERSION at $RELEASE_SHA"
 
 # =============================================================================
 # Done
 # =============================================================================
-printf "\n${GREEN}Released %s${NC} (tagged on %s at %s; %s advanced; main untouched)\n" \
-  "$VERSION" "$INTEGRATION_BRANCH" "$RELEASE_SHA" "$DEPLOYED_BRANCH"
+printf "\n${GREEN}Released %s${NC} (tagged on %s at %s; recorded on %s)\n" \
+  "$VERSION" "$INTEGRATION_BRANCH" "$RELEASE_SHA" "$RECORD_BRANCH"
 printf "${GRAY}Release: $(gh release view "$VERSION" --repo "$NWO" --json url -q .url 2>/dev/null)${NC}\n"
 if [[ "$VERSION" == *-* ]]; then
   printf "${GRAY}This is a HIDDEN RC (prerelease): pinnable by exact version, excluded from Latest. Advertise/pin downstream (foreman NODE_AGENT_VERSION; conductor per-cluster).${NC}\n"
 fi
-printf "${GRAY}Publishing does NOT roll the live fleet. Advertise NODE_AGENT_VERSION in foreman; main is yours to merge once verified.${NC}\n"
+printf "${GRAY}Publishing does NOT roll the live fleet. Advertise NODE_AGENT_VERSION in foreman.${NC}\n"

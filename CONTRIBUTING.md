@@ -128,6 +128,15 @@ raw attested binaries on GitHub Releases; publishing the artifact is the release
 fail-closed sensitivity scan, the leak gate, and the build/vet/test gates before
 tagging and pushing. Do not push release tags or publish releases by hand.
 
+Two branches record what shipped, and the script moves them only after the
+release is verified, by fast-forward only. `deployed` holds the last commit that
+was tagged, a candidate or a final. `main` is the prod record: a final
+fast-forwards it to the commit its tag names, and a candidate never moves it. A
+final is refused before the tag when `main` is not an ancestor of `dev`.
+[`scripts/record-release.sh`](scripts/record-release.sh) holds the rule and
+`scripts/record-release-test.sh` tests it against a local bare repository (the
+`releasecheck` Go tests run it).
+
 ## Security
 
 For anything security-sensitive, see [`SECURITY.md`](SECURITY.md). Report
