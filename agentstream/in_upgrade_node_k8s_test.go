@@ -3,6 +3,9 @@ package agentstream
 import (
 	"encoding/base64"
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -376,3 +379,72 @@ type fakeAptError struct{}
 func (fakeAptError) Error() string { return "exit status 100" }
 
 var errFakeApt error = fakeAptError{}
+
+// fakeAptMarkShell runs the apt-mark loop commands in a real /bin/sh with a
+// fake dpkg-query (every name is installed) and a fake apt-mark that logs its
+// arguments and fails for the names in failFor. It returns the runner and the
+// log file.
+func fakeAptMarkShell(t *testing.T, failFor ...string) (func(string) (string, error), string) {
+	t.Helper()
+	dir := t.TempDir()
+	logFile := filepath.Join(dir, "apt-mark.log")
+	scripts := map[string]string{
+		"dpkg-query": "#!/bin/sh\nprintf installed\n",
+		"apt-mark": "#!/bin/sh\necho \"$@\" >> " + logFile + "\n" +
+			"case \" " + strings.Join(failFor, " ") + " \" in *\" $2 \"*) exit 100;; esac\nexit 0\n",
+	}
+	for name, body := range scripts {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return func(command string) (string, error) {
+		cmd := exec.Command("/bin/sh", "-c", command)
+		cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}, logFile
+}
+
+// The unhold loop stops at the first apt-mark failure. When containerd is
+// released and the cri-tools release then fails, the upgrade stops, but it must
+// not leave containerd open to a plain apt-get upgrade: it holds the runtime
+// packages again before it returns.
+func TestUpgradeNodeK8sHoldsContainerdAgainWhenALaterUnholdFails(t *testing.T) {
+	rec := &upgradeRecorder{target: "1.35.9"}
+	rec.install(t)
+	record := upgradeRunShell
+	shell, logFile := fakeAptMarkShell(t, "cri-tools")
+	upgradeRunShell = func(c string) (string, error) {
+		if strings.Contains(c, `apt-mark unhold "$p"`) || strings.Contains(c, `apt-mark hold "$p"`) {
+			rec.commands = append(rec.commands, "sh: "+c)
+			return shell(c)
+		}
+		return record(c)
+	}
+
+	resp, _ := handleUpgradeNodeK8s(upgradeInstruction(t, validUpgradeRequest()), &ProgressTagger{})
+	if upgradeResult(t, resp).Success {
+		t.Fatal("expected the upgrade to fail")
+	}
+	for _, c := range rec.commands {
+		if strings.HasPrefix(c, "sh: apt-get install") {
+			t.Fatalf("nothing may be installed after a failed unhold: %q", rec.commands)
+		}
+	}
+	b, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(calls) < 2 || calls[0] != "unhold containerd" || calls[1] != "unhold cri-tools" {
+		t.Fatalf("the test needs containerd released before cri-tools fails, apt-mark calls = %q", calls)
+	}
+	held := false
+	for _, c := range calls[2:] {
+		held = held || c == "hold containerd"
+	}
+	if !held {
+		t.Fatalf("containerd was released and never held again, apt-mark calls = %q", calls)
+	}
+}
