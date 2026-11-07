@@ -19,6 +19,8 @@ as the GitHub release notes, so every released version needs a section here.
 - A shell command that exits quickly now always returns all of its output. The two runners that watch a command for silence (package-manager commands and the install steps) read the output in one goroutine while another called `Wait`, and `Wait` closes the pipes, so a fast command could return an empty string ("read |0: file already closed"). The Kubernetes node upgrade then read the installed containerd as empty and ran a needless containerd install (FCR 1661). Output now goes straight into one collector that `Wait` drains before it returns.
 - A command that prints one line longer than 64 KiB is no longer killed as hung: the old line reader stopped at that size, stopped draining the pipe, and the command blocked until the silence timer fired.
 - Output of the two runners now keeps the order the command wrote its standard output and standard error in (before, all standard output came first).
+- The Kubernetes node upgrade holds containerd, cri-tools and kubernetes-cni again when releasing the hold stops part way (for example `apt-mark unhold` fails on cri-tools after it released containerd). Before, the safety re-hold was set up only after the release step, so containerd could stay unheld (FCR 933).
+- Downgrading a node below v1.8.7 after a v1.8.7 Kubernetes upgrade held containerd, cri-tools and kubernetes-cni is not supported: the v1.8.6 uninstall does not release those holds, so its package purge would fail.
 
 ## v1.8.6
 
