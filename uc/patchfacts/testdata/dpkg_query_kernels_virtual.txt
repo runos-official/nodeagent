@@ -1,0 +1,3 @@
+linux-image-6.8.0-142-generic 6.8.0-142.142 installed
+linux-image-unsigned-6.8.0-142-generic  not-installed
+linux-image-virtual 6.8.0-142.142 installed

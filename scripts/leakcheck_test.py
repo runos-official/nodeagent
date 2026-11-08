@@ -204,7 +204,17 @@ def main() -> int:
     # 1.1.0 guards the netmask allowance: only 255.x, only contiguous.
     expect_catch("non-contiguous mask-shaped quad", "mask %s\n" % dotted(255, 255, 1, 0), dotted(255, 255, 1, 0))
     expect_catch("contiguous mask below /8", "base %s/2\n" % dotted(192, 0, 0, 0), dotted(192, 0, 0, 0))
-    expect_catch("wildcard mask, not a netmask", "acl %s\n" % dotted(0, 255, 255, 255), dotted(0, 255, 255, 255))
+    # 1.3.0 CHANGED THIS CASE, and it is the one expectation this version
+    # flips, so read the reason before you trust it. It used to assert that a
+    # WILDCARD mask is caught, which guarded the netmask allowance against
+    # covering an inverse mask. A wildcard mask is an inverted netmask, so its
+    # first octet is always 0 and it ALWAYS sits inside RFC 1122's reserved
+    # 0.0.0.0/8. The 1.3.0 rule allows the whole of that range for a reason
+    # that has nothing to do with masks: no host is ever assigned an address
+    # there, so nothing can be learnt from one. The netmask rule itself is
+    # unchanged, and the two cases above still fence it: a mask-shaped quad
+    # that is not contiguous, and a contiguous mask below /8, are both caught.
+    expect_clean("wildcard mask, which is inside the reserved 0/8", "acl %s\n" % dotted(0, 255, 255, 255))
 
     # Credentials, which are never baselineable.
     expect_catch("AWS access key id", "aws_access_key_id = %s\n" % AWS_KEY_ID, AWS_KEY_ID)
@@ -302,6 +312,18 @@ def main() -> int:
     expect_clean("/21 netmask", "Subnet mask . . . : %s\n" % dotted(255, 255, 248, 0))
     expect_clean("/8 netmask", "netmask %s\n" % dotted(255, 0, 0, 0))
     expect_clean("/24 netmask", "netmask %s\n" % dotted(255, 255, 255, 0))
+
+    print()
+    # 1.3.0: 0.0.0.0/8 is reserved as "this network" (RFC 1122), so no host can
+    # hold an address in it. The range is allowed because a DOTTED VERSION lands
+    # in it: a Debian package version like 0.99.49.3 is four numbers under 256,
+    # the one shape the IPv4 pattern cannot tell apart from an address. Captured
+    # package manager output carries many of them, and ratcheting each one spent
+    # baseline rows on lines that name nobody.
+    expect_clean("a Debian package version shaped like a quad", "Inst foo [%s] (%s)\n" % (dotted(0, 99, 49, 3), dotted(0, 99, 49, 4)))
+    expect_clean("another dotted version in 0/8", "version %s\n" % dotted(0, 1, 2, 3))
+    # The rule stays narrow: any other first octet is still an address.
+    expect_catch("a real-looking address outside 0/8", "host %s\n" % dotted(1, 99, 49, 3), dotted(1, 99, 49, 3))
 
     # Things that look numeric but are not addresses. These are the false
     # positives that would get the gate switched off.

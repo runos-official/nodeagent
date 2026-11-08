@@ -1,0 +1,12 @@
+Id=logrotate.timer
+LoadState=loaded
+ActiveState=active
+UnitFileState=enabled
+Id=fstrim.timer
+LoadState=loaded
+ActiveState=active
+UnitFileState=enabled
+Id=ssh.service
+LoadState=loaded
+ActiveState=active
+UnitFileState=disabled

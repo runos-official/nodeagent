@@ -60,7 +60,7 @@ import re
 import subprocess
 import sys
 
-LEAKCHECK_VERSION = "1.2.1"
+LEAKCHECK_VERSION = "1.3.0"
 
 # ---------------------------------------------------------------------------
 # Credential shapes. Kept in step with CREDENTIAL in scripts/release.sh.
@@ -269,6 +269,28 @@ def is_ipv4_netmask(addr) -> bool:
     return inverted & (inverted + 1) == 0
 
 
+def is_reserved_zero_network(addr) -> bool:
+    """True for an IPv4 address in 0.0.0.0/8.
+
+    1.3.0. RFC 1122 reserves the whole of 0.0.0.0/8 as "this network". No host
+    is ever assigned an address in it and no router forwards one, so a leak
+    cannot hide there: a reader who finds 0.99.49.3 learns nothing about any
+    machine, because no machine can have it.
+
+    The range exists in this file because a DOTTED VERSION lands in it. A
+    Debian package version such as 0.99.49.3 is four numbers under 256, which
+    is the one shape the IPv4 pattern cannot tell apart from an address, and
+    captured package manager output is full of them. Before this rule they were
+    ratcheted into the baseline, which spent rows on lines that name nobody and
+    trained a reader to skim the baseline instead of reading it.
+
+    The rule is narrow on purpose. It covers 0.x.y.z and nothing else: the
+    unspecified address 0.0.0.0 was already allowed, and widening to any other
+    first octet would cover addresses a real host can hold.
+    """
+    return addr.version == 4 and int(addr) >> 24 == 0
+
+
 def classify_ip(token: str):
     """Return the address if it must be reported, or None if it is allowed."""
     try:
@@ -279,6 +301,8 @@ def classify_ip(token: str):
         if addr.version == net.version and addr in net:
             return None
     if is_ipv4_netmask(addr):
+        return None
+    if is_reserved_zero_network(addr):
         return None
     return addr
 

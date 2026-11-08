@@ -1,0 +1,3 @@
+kubeadm
+kubectl
+kubelet

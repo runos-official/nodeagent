@@ -1,0 +1,11 @@
+containerd
+cri-tools
+dnsmasq
+etcd-client
+haproxy
+kubeadm
+kubectl
+kubelet
+kubernetes-cni
+runc
+wireguard-tools
