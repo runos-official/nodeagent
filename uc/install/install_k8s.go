@@ -13,6 +13,7 @@ import (
 	"github.com/runos-official/nodeagent/commons"
 	pb "github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/version"
 )
 
 // WAITING FOR THE FIRST CONTROL PLANE (goal 30, G30-F1).
@@ -116,9 +117,7 @@ func K8s() error {
 	// Encode the file list to JSON and then to base64
 	fileListEncoded, err := commons.JSONB64Encode(fileList)
 
-	request := &pb.GetInstallCommandsRequest{
-		JsonB64FileList: fileListEncoded,
-	}
+	request := newGetInstallCommandsRequest(fileListEncoded)
 
 	res, err := fetchInstallCommands(func() (*pb.InstallCommandList, error) {
 		// One deadline per call: a wait can outlive any single deadline by design. 90 s, not 30:
@@ -134,6 +133,24 @@ func K8s() error {
 	}
 
 	return commons.ProcessInstallCommandsStatusAware(res)
+}
+
+// newGetInstallCommandsRequest builds the install-commands request.
+//
+// IT CARRIES THIS AGENT'S OWN VERSION. The control plane gates the runtime
+// package holds on the node agent version, and it must read that version from
+// the REQUEST: the stored node record is filled by the heartbeat, and a node
+// being installed may not have sent one yet, so a gate reading the record would
+// skip the holds on every fresh node. The value is version.Version, which the
+// release pipeline injects at link time and which reads "dev" for a local build.
+//
+// It is a named function so a test can read the request without a control plane
+// connection.
+func newGetInstallCommandsRequest(fileListEncoded string) *pb.GetInstallCommandsRequest {
+	return &pb.GetInstallCommandsRequest{
+		JsonB64FileList:  fileListEncoded,
+		NodeAgentVersion: version.Version,
+	}
 }
 
 // fetchMaxAttempts bounds the transient-error retries of the install command fetch. The waits use

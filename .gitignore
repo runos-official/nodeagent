@@ -64,3 +64,6 @@ Desktop.ini
 secrets.yaml
 
 cache
+
+# protogen -print reference output (make proto-ref), never committed
+.proto-ref/

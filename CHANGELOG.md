@@ -7,6 +7,23 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## Unreleased
+
+### Added
+
+- The install-commands request the agent sends at node install now carries the agent's own version, as `nodeAgentVersion` (field 10 of `GetInstallCommandsRequest`, a string). Nodeward needs it to gate the runtime package holds on the agent version, and it must read the version from the request rather than from the stored node record, because a node that is being installed may not have sent a heartbeat yet. Nodeward must fail closed on an absent, empty or non-release value: an agent released before this change sends no field at all. `NOTES-nodeward.md` carries the full handoff.
+- `make proto-check` refuses a generated `l2sec/nodeward_l2sec.pb.go` that protoc-gen-go would not produce from the file's own descriptor, and `go test ./l2sec/` holds the Go struct tag and the serialized descriptor to each other for every field of every message. This repository holds the generated file and no `.proto` source, so a field added to one copy of the definition and not the other used to be silent drift on the wire. `make proto-ref` writes the reference generated file to diff against when adding a field; it cannot overwrite the committed file, because the compiled descriptor carries no `SourceCodeInfo` and a full regeneration would delete every proto comment.
+
+### Changed
+
+- One declaration, `commons.RunosPackages`, is now the single source for the hold list, the Kubernetes-upgrade move list, the uninstall unhold loop and the uninstall purge list. Those were four hand-maintained lists of the same set in two files, with no test relating them, and they had drifted. The derived lists are unchanged in content except for the purge fix below, and a test now refuses a declaration that contradicts itself or a list that carries a name the declaration does not.
+- The Kubernetes node upgrade decides whether to install containerd by comparing Debian UPSTREAM VERSIONS instead of testing a string prefix. The new `commons.SameUpstreamVersion` and `commons.IsSameUpstreamNewerRevision` compare versions the way dpkg does, epoch and upstream version and revision, and a test cross-checks them against `dpkg --compare-versions` on the build host. `IsSameUpstreamNewerRevision` is the decision a controlled maintenance run needs: a held package may move only to a newer distribution revision of the version the node already runs. This release adds the decision; no maintenance run calls it yet.
+
+### Fixed
+
+- A node delete no longer leaves cri-tools installed. The uninstall released the apt hold on cri-tools and then purged a hand-typed list of nine package names that omitted it, so the package survived every node delete with its hold released. The purge list is now derived from the one declaration and is a superset of the held set by construction, which a test enforces (FCR 933).
+- The Kubernetes node upgrade no longer skips a real containerd upgrade when the target version spells the start of the installed one. A target of 1.7.2 prefix-matched an installed 1.7.24, so the upgrade reported "containerd already at 1.7.2" and installed nothing. It also no longer reinstalls containerd when only the distribution revision differs, because moving a held package to a newer revision belongs to a controlled maintenance run. On a version it cannot read it installs the target, because the caller asked for that version explicitly.
+
 ## v1.8.7
 
 ### Changed
