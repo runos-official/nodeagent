@@ -83,6 +83,14 @@ the gate should compare it as the version it names.
 does not refuse the install-hold commands on its own version, so a nodeward that skips the check
 sends holds to an agent that cannot release them, which is what the gate exists to prevent.
 
+**The VPN install-command RPC cannot carry this gate.** A node install calls
+`GetInstallVpnCommands` before `GetInstallCommands`. The standalone WireGuard install command also
+calls only `GetInstallVpnCommands`. Its `GetInstallVpnCommandsRequest` message has no fields, so it
+carries no node agent version. Nodeward must emit no package-hold command from the VPN command
+list. Every install-hold command, including a hold for `wireguard-tools`, must come from the
+`GetInstallCommands` response after Nodeward accepts `nodeAgentVersion`. This boundary keeps the
+gate closed when only the VPN command list runs.
+
 **The proto is hand-synced and has no gate across the two repositories.** Use field number 10 for
 this field and this type. A different number on the nodeward side means both sides marshal happily
 and the gate silently reads nothing. This repository holds only the generated file, and two guards

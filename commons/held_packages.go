@@ -39,16 +39,19 @@ type RunosPackage struct {
 
 // RunosPackages is the authoritative set. Every list below derives from it.
 //
-// The set is the ten names the node agent already treats as RunOS-owned. The
-// RunOS install puts 27 packages on a node, measured on 2026-11-08 on an Ubuntu
-// 24.04 control plane and worker, and the other 17 are deliberately NOT here:
+// The set is the ten names that the node agent already treats as RunOS-owned.
+// The Nodeward install command builder has 28 unique apt package specifications.
+// Eight specifications are rows in this table. Kubernetes installs a ninth row,
+// kubernetes-cni, as a dependency. The tenth row, wireguard, is absent.
+//
+// The other 20 command specifications are deliberately not in this table:
 // apt-transport-https, ca-certificates, curl, gpg, etcd-client, jq, htop,
 // net-tools, tcpdump, mtr-tiny, dnsutils, iotop, nethogs, ncdu, strace, lsof,
-// vim-tiny, bpftrace and kubectx. Purging ca-certificates, curl or gpg would
-// break TLS and apt on the node, so widening the purge set to the whole install
-// list would be a worse defect than the one this table fixes. Whether
-// etcd-client and the operator tools should be RunOS-owned is a separate
-// decision.
+// vim-tiny, bpftrace, kubectx and linux-headers-$(uname -r). Purging
+// ca-certificates, curl or gpg would break TLS and apt on the node. Widening the
+// purge set to the whole install list would be a worse defect. Whether
+// etcd-client, kernel headers and the operator tools should be RunOS-owned is a
+// separate decision.
 var RunosPackages = []RunosPackage{
 	// The Kubernetes trio. The node install holds these, and only an explicit
 	// Kubernetes upgrade moves them.

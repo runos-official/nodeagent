@@ -66,7 +66,8 @@ proto-check:
 
 # Write the reference generated file somewhere to diff against, when adding a
 # field. It carries NO proto comments, because the compiled descriptor has no
-# SourceCodeInfo, so apply its field hunks by hand and keep the comments.
+# SourceCodeInfo, so apply its field hunks by hand and keep the comments. The
+# tool refuses DIR values that resolve to the committed generated file.
 # Read the header of tools/protogen/main.go before using it.
 .PHONY: proto-ref
 proto-ref:

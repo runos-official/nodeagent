@@ -184,9 +184,9 @@ func TestRunosPackagesDeclarationIsConsistent(t *testing.T) {
 
 // The set itself, pinned. A package added here starts being held on every node
 // and purged on every node delete, so the change must be deliberate and must be
-// read by a human. Measured on 2026-11-08 on an Ubuntu 24.04 control plane and
-// worker: the RunOS install puts 27 packages on a node, and these are the ten
-// RunOS owns.
+// read by a human. The Nodeward install command builder has 28 unique apt
+// package specifications. Eight specifications are rows below, and 20 are not.
+// Kubernetes installs kubernetes-cni as the ninth row. Wireguard is absent.
 func TestRunosPackagesSetIsPinned(t *testing.T) {
 	want := []string{
 		"kubelet", "kubeadm", "kubectl",

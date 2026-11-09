@@ -24,7 +24,8 @@
 // comments and alignment. A difference means the generated file carries
 // something protoc-gen-go would not produce, which is exactly the hand-edit
 // drift this program guards. It also checks that every field in addedFields is
-// really in the committed descriptor.
+// really in the committed descriptor. Reference mode resolves both paths and
+// refuses the committed generated file, including a symlinked equivalent.
 //
 // ADDING A FIELD.
 //  1. Add a row to addedFields and pick the next free number; the numbers in
@@ -101,6 +102,10 @@ func main() {
 	fdp := protodesc.ToFileDescriptorProto(pb.File_nodeward_l2sec_proto)
 
 	if *printTo != "" {
+		path, err := referenceOutputPath(*root, *printTo)
+		if err != nil {
+			fail(err)
+		}
 		for _, f := range addedFields {
 			if err := applyField(fdp, f); err != nil {
 				fail(err)
@@ -110,7 +115,6 @@ func main() {
 		if err != nil {
 			fail(err)
 		}
-		path := filepath.Join(*printTo, filepath.Base(generatedFile))
 		if err := os.MkdirAll(*printTo, 0o755); err != nil {
 			fail(err)
 		}
@@ -123,6 +127,58 @@ func main() {
 	}
 
 	verify(*root, fdp)
+}
+
+// referenceOutputPath returns the requested reference file after it proves that
+// the output is not the committed generated file. Both paths are resolved first,
+// so a symlink or an equivalent relative path cannot bypass the refusal.
+func referenceOutputPath(root, printTo string) (string, error) {
+	output := filepath.Join(printTo, filepath.Base(generatedFile))
+	protected := filepath.Join(root, generatedFile)
+
+	resolvedOutput, err := resolvePath(output)
+	if err != nil {
+		return "", fmt.Errorf("resolving reference output %s: %w", output, err)
+	}
+	resolvedProtected, err := resolvePath(protected)
+	if err != nil {
+		return "", fmt.Errorf("resolving protected generated file %s: %w", protected, err)
+	}
+	if resolvedOutput == resolvedProtected {
+		return "", fmt.Errorf("refusing to overwrite protected generated file %s", protected)
+	}
+	return output, nil
+}
+
+// resolvePath resolves every existing symlink in path. A reference directory
+// may not exist yet, so the function resolves its nearest existing parent and
+// then restores the missing suffix.
+func resolvePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+
+	current := abs
+	var missing []string
+	for {
+		resolved, evalErr := filepath.EvalSymlinks(current)
+		if evalErr == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(evalErr) {
+			return "", evalErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", evalErr
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 // verify holds the committed file to two things: every declared added field is
