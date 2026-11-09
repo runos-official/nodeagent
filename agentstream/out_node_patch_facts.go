@@ -439,7 +439,7 @@ func consumePatchFactsInstallTriggers(path string, ownerUID uint32, reporter *pa
 			return err
 		}
 
-		err := unix.Renameat2(unix.AT_FDCWD, path, unix.AT_FDCWD, processing, unix.RENAME_NOREPLACE)
+		err := movePatchFactsMarkerNoReplace(path, processing)
 		switch {
 		case err == nil:
 			continue
