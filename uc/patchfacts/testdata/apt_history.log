@@ -1,0 +1,75 @@
+Start-Date: 2026-11-02  13:19:47
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends wireguard-tools=1.0.20210914*
+Install: wireguard-tools:amd64 (1.0.20210914-1ubuntu4)
+End-Date: 2026-11-02  13:19:48
+
+Start-Date: 2026-11-02  13:20:25
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends dnsmasq=2.90*
+Install: dnsmasq:amd64 (2.90-2ubuntu0.4), dnsmasq-base:amd64 (2.91-0ubuntu0.24.04.2, automatic)
+End-Date: 2026-11-02  13:20:26
+
+Start-Date: 2026-11-02  13:20:51
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold containerd=2.2.1*
+Install: containerd:amd64 (2.2.1-0ubuntu1~24.04.4), runc:amd64 (1.3.4-0ubuntu1~24.04.1, automatic)
+End-Date: 2026-11-02  13:20:54
+
+Start-Date: 2026-11-02  13:21:23
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold kubelet=1.35.9* kubeadm=1.35.9* kubectl=1.35.9*
+Install: kubernetes-cni:amd64 (1.8.0-1.1, automatic), kubeadm:amd64 (1.35.9-1.1), kubectl:amd64 (1.35.9-1.1), kubelet:amd64 (1.35.9-1.1)
+End-Date: 2026-11-02  13:21:27
+
+Start-Date: 2026-11-02  13:21:32
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends haproxy=2.8.5*
+Install: liblua5.4-0:amd64 (5.4.6-3build2, automatic), haproxy:amd64 (2.8.5-1ubuntu3)
+End-Date: 2026-11-02  13:21:34
+
+Start-Date: 2026-11-02  13:30:48
+Commandline: apt-get -o DPkg::Lock::Timeout=120 -y remove --purge containerd dnsmasq haproxy kubeadm kubectl kubelet kubernetes-cni wireguard-tools
+Purge: dnsmasq:amd64 (2.90-2ubuntu0.4), containerd:amd64 (2.2.1-0ubuntu1~24.04.4), wireguard-tools:amd64 (1.0.20210914-1ubuntu4), kubernetes-cni:amd64 (1.8.0-1.1), haproxy:amd64 (2.8.5-1ubuntu3), kubeadm:amd64 (1.35.9-1.1), kubectl:amd64 (1.35.9-1.1), kubelet:amd64 (1.35.9-1.1)
+End-Date: 2026-11-02  13:30:53
+
+Start-Date: 2026-11-02  13:30:55
+Commandline: apt-get -o DPkg::Lock::Timeout=120 -y autoremove
+Remove: liblua5.4-0:amd64 (5.4.6-3build2), dnsmasq-base:amd64 (2.91-0ubuntu0.24.04.2), runc:amd64 (1.3.4-0ubuntu1~24.04.1)
+End-Date: 2026-11-02  13:30:56
+
+Start-Date: 2026-11-02  13:33:37
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends wireguard-tools=1.0.20210914*
+Install: wireguard-tools:amd64 (1.0.20210914-1ubuntu4)
+End-Date: 2026-11-02  13:33:38
+
+Start-Date: 2026-11-02  13:34:08
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends dnsmasq=2.90*
+Install: dnsmasq:amd64 (2.90-2ubuntu0.4), dnsmasq-base:amd64 (2.91-0ubuntu0.24.04.2, automatic)
+End-Date: 2026-11-02  13:34:09
+
+Start-Date: 2026-11-02  13:34:27
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold containerd=2.2.1*
+Install: containerd:amd64 (2.2.1-0ubuntu1~24.04.4), runc:amd64 (1.3.4-0ubuntu1~24.04.1, automatic)
+End-Date: 2026-11-02  13:34:31
+
+Start-Date: 2026-11-02  13:34:56
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold kubelet=1.35.9* kubeadm=1.35.9* kubectl=1.35.9*
+Install: kubernetes-cni:amd64 (1.8.0-1.1, automatic), kubeadm:amd64 (1.35.9-1.1), kubectl:amd64 (1.35.9-1.1), kubelet:amd64 (1.35.9-1.1)
+End-Date: 2026-11-02  13:34:59
+
+Start-Date: 2026-11-02  13:35:04
+Commandline: apt-get -o DPkg::Lock::Timeout=300 install -y -V --no-install-recommends haproxy=2.8.5*
+Install: liblua5.4-0:amd64 (5.4.6-3build2, automatic), haproxy:amd64 (2.8.5-1ubuntu3)
+End-Date: 2026-11-02  13:35:06
+
+Start-Date: 2026-11-02  13:48:41
+Commandline: apt-get install -y kubeadm=1.36.5-*
+Upgrade: kubeadm:amd64 (1.35.9-1.1, 1.36.5-1.1)
+End-Date: 2026-11-02  13:48:42
+
+Start-Date: 2026-11-02  13:51:53
+Commandline: apt-get install -y kubelet=1.36.5-* kubectl=1.36.5-*
+Upgrade: kubectl:amd64 (1.35.9-1.1, 1.36.5-1.1), kubelet:amd64 (1.35.9-1.1, 1.36.5-1.1)
+End-Date: 2026-11-02  13:51:56
+
+Start-Date: 2026-11-02  21:50:15
+Commandline: apt-get install -y --no-install-recommends cri-tools=1.36.*
+Requested-By: operator (1000)
+Install: cri-tools:amd64 (1.36.0-1.1)
+End-Date: 2026-11-02  21:50:16

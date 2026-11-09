@@ -1,0 +1,915 @@
+motd-news-config:
+  Installed: 13ubuntu10.4
+  Candidate: 13ubuntu10.5
+  Version table:
+     13ubuntu10.5 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 13ubuntu10.4 100
+        100 /var/lib/dpkg/status
+     13ubuntu10 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+base-files:
+  Installed: 13ubuntu10.4
+  Candidate: 13ubuntu10.5
+  Version table:
+     13ubuntu10.5 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 13ubuntu10.4 100
+        100 /var/lib/dpkg/status
+     13ubuntu10 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+console-setup-linux:
+  Installed: 1.226ubuntu1
+  Candidate: 1.226ubuntu1.1
+  Version table:
+     1.226ubuntu1.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.226ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+console-setup:
+  Installed: 1.226ubuntu1
+  Candidate: 1.226ubuntu1.1
+  Version table:
+     1.226ubuntu1.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.226ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+keyboard-configuration:
+  Installed: 1.226ubuntu1
+  Candidate: 1.226ubuntu1.1
+  Version table:
+     1.226ubuntu1.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.226ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+systemd-dev:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+systemd-timesyncd:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+systemd-resolved:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libsystemd-shared:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libsystemd0:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+systemd-sysv:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libnss-systemd:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libpam-systemd:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+systemd:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+udev:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libudev1:
+  Installed: 255.4-1ubuntu8.17
+  Candidate: 255.4-1ubuntu8.18
+  Version table:
+     255.4-1ubuntu8.18 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 255.4-1ubuntu8.17 100
+        100 /var/lib/dpkg/status
+     255.4-1ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libapparmor1:
+  Installed: 4.0.1really4.0.1-0ubuntu0.24.04.5
+  Candidate: 4.0.1really4.0.1-0ubuntu0.24.04.9
+  Version table:
+     4.0.1really4.0.1-0ubuntu0.24.04.9 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 4.0.1really4.0.1-0ubuntu0.24.04.5 100
+        100 /var/lib/dpkg/status
+     4.0.0-beta3-0ubuntu3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libaudit-common:
+  Installed: 1:3.1.2-2.1build1.1
+  Candidate: 1:3.1.2-2.1ubuntu0.1
+  Version table:
+     1:3.1.2-2.1ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1:3.1.2-2.1build1.1 100
+        100 /var/lib/dpkg/status
+     1:3.1.2-2.1build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libaudit1:
+  Installed: 1:3.1.2-2.1build1.1
+  Candidate: 1:3.1.2-2.1ubuntu0.1
+  Version table:
+     1:3.1.2-2.1ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1:3.1.2-2.1build1.1 100
+        100 /var/lib/dpkg/status
+     1:3.1.2-2.1build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+liblzma5:
+  Installed: 5.6.1+really5.4.5-1ubuntu0.3
+  Candidate: 5.6.1+really5.4.5-1ubuntu0.4
+  Version table:
+     5.6.1+really5.4.5-1ubuntu0.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 5.6.1+really5.4.5-1ubuntu0.3 100
+        100 /var/lib/dpkg/status
+     5.6.1+really5.4.5-1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python-apt-common:
+  Installed: 2.7.7ubuntu5.2
+  Candidate: 2.7.7ubuntu5.3
+  Version table:
+     2.7.7ubuntu5.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.7.7ubuntu5.2 100
+        100 /var/lib/dpkg/status
+     2.7.7ubuntu5.1 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     2.7.7ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+distro-info-data:
+  Installed: 0.72-0ubuntu0.24.04.1
+  Candidate: 2026.10.12-0ubuntu0.24.04.1
+  Version table:
+     2026.10.12-0ubuntu0.24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 0.72-0ubuntu0.24.04.1 100
+        100 /var/lib/dpkg/status
+     0.60 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python3-apt:
+  Installed: 2.7.7ubuntu5.2
+  Candidate: 2.7.7ubuntu5.3
+  Version table:
+     2.7.7ubuntu5.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.7.7ubuntu5.2 100
+        100 /var/lib/dpkg/status
+     2.7.7ubuntu5.1 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     2.7.7ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python3-problem-report:
+  Installed: 2.28.1-0ubuntu3.8
+  Candidate: 2.28.3-0ubuntu0.1
+  Version table:
+     2.28.3-0ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.28.1-0ubuntu3.8 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.28.1-0ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python3-apport:
+  Installed: 2.28.1-0ubuntu3.8
+  Candidate: 2.28.3-0ubuntu0.1
+  Version table:
+     2.28.3-0ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.28.1-0ubuntu3.8 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.28.1-0ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libglib2.0-data:
+  Installed: 2.80.0-6ubuntu3.9
+  Candidate: 2.80.0-6ubuntu3.10
+  Version table:
+     2.80.0-6ubuntu3.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.80.0-6ubuntu3.9 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.80.0-6ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libglib2.0-bin:
+  Installed: 2.80.0-6ubuntu3.9
+  Candidate: 2.80.0-6ubuntu3.10
+  Version table:
+     2.80.0-6ubuntu3.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.80.0-6ubuntu3.9 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.80.0-6ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+zlib1g:
+  Installed: 1:1.3.dfsg-3.1ubuntu2.2
+  Candidate: 1:1.3.dfsg-3.1ubuntu2.3
+  Version table:
+     1:1.3.dfsg-3.1ubuntu2.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 1:1.3.dfsg-3.1ubuntu2.2 100
+        100 /var/lib/dpkg/status
+     1:1.3.dfsg-3.1ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+gir1.2-glib-2.0:
+  Installed: 2.80.0-6ubuntu3.9
+  Candidate: 2.80.0-6ubuntu3.10
+  Version table:
+     2.80.0-6ubuntu3.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.80.0-6ubuntu3.9 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.80.0-6ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libglib2.0-0t64:
+  Installed: 2.80.0-6ubuntu3.9
+  Candidate: 2.80.0-6ubuntu3.10
+  Version table:
+     2.80.0-6ubuntu3.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.80.0-6ubuntu3.9 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.80.0-6ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+apport-core-dump-handler:
+  Installed: 2.28.1-0ubuntu3.8
+  Candidate: 2.28.3-0ubuntu0.1
+  Version table:
+     2.28.3-0ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.28.1-0ubuntu3.8 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.28.1-0ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+apport:
+  Installed: 2.28.1-0ubuntu3.8
+  Candidate: 2.28.3-0ubuntu0.1
+  Version table:
+     2.28.3-0ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.28.1-0ubuntu3.8 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.28.1-0ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+dnsmasq:
+  Installed: 2.90-2ubuntu0.4
+  Candidate: 2.91-0ubuntu0.24.04.2
+  Version table:
+     2.91-0ubuntu0.24.04.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages
+ *** 2.90-2ubuntu0.4 500
+        500 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages
+        100 /var/lib/dpkg/status
+     2.90-2build2 500
+        500 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages
+haproxy:
+  Installed: 2.8.5-1ubuntu3
+  Candidate: 2.8.30-0ubuntu0.24.04.1
+  Version table:
+     2.8.30-0ubuntu0.24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+     2.8.16-0ubuntu0.24.04.3 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 2.8.5-1ubuntu3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+libopeniscsiusr:
+  Installed: 2.1.9-3ubuntu5.4
+  Candidate: 2.1.9-3ubuntu5.5
+  Version table:
+     2.1.9-3ubuntu5.5 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.1.9-3ubuntu5.4 100
+        100 /var/lib/dpkg/status
+     2.1.9-3ubuntu4 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+open-iscsi:
+  Installed: 2.1.9-3ubuntu5.4
+  Candidate: 2.1.9-3ubuntu5.5
+  Version table:
+     2.1.9-3ubuntu5.5 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.1.9-3ubuntu5.4 100
+        100 /var/lib/dpkg/status
+     2.1.9-3ubuntu4 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+git-man:
+  Installed: 1:2.43.0-1ubuntu7.3
+  Candidate: 1:2.43.0-1ubuntu7.4
+  Version table:
+     1:2.43.0-1ubuntu7.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 1:2.43.0-1ubuntu7.3 100
+        100 /var/lib/dpkg/status
+     1:2.43.0-1ubuntu7 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+git:
+  Installed: 1:2.43.0-1ubuntu7.3
+  Candidate: 1:2.43.0-1ubuntu7.4
+  Version table:
+     1:2.43.0-1ubuntu7.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 1:2.43.0-1ubuntu7.3 100
+        100 /var/lib/dpkg/status
+     1:2.43.0-1ubuntu7 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libgssapi-krb5-2:
+  Installed: 1.20.1-6ubuntu2.7
+  Candidate: 1.20.1-6ubuntu2.10
+  Version table:
+     1.20.1-6ubuntu2.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.20.1-6ubuntu2.7 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     1.20.1-6ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libkrb5-3:
+  Installed: 1.20.1-6ubuntu2.7
+  Candidate: 1.20.1-6ubuntu2.10
+  Version table:
+     1.20.1-6ubuntu2.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.20.1-6ubuntu2.7 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     1.20.1-6ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libkrb5support0:
+  Installed: 1.20.1-6ubuntu2.7
+  Candidate: 1.20.1-6ubuntu2.10
+  Version table:
+     1.20.1-6ubuntu2.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.20.1-6ubuntu2.7 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     1.20.1-6ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libk5crypto3:
+  Installed: 1.20.1-6ubuntu2.7
+  Candidate: 1.20.1-6ubuntu2.10
+  Version table:
+     1.20.1-6ubuntu2.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.20.1-6ubuntu2.7 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     1.20.1-6ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+openssh-sftp-server:
+  Installed: 1:9.6p1-3ubuntu13.19
+  Candidate: 1:9.6p1-3ubuntu13.20
+  Version table:
+     1:9.6p1-3ubuntu13.20 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 1:9.6p1-3ubuntu13.19 100
+        100 /var/lib/dpkg/status
+     1:9.6p1-3ubuntu13 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+openssh-server:
+  Installed: 1:9.6p1-3ubuntu13.19
+  Candidate: 1:9.6p1-3ubuntu13.20
+  Version table:
+     1:9.6p1-3ubuntu13.20 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 1:9.6p1-3ubuntu13.19 100
+        100 /var/lib/dpkg/status
+     1:9.6p1-3ubuntu13 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+openssh-client:
+  Installed: 1:9.6p1-3ubuntu13.19
+  Candidate: 1:9.6p1-3ubuntu13.20
+  Version table:
+     1:9.6p1-3ubuntu13.20 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 1:9.6p1-3ubuntu13.19 100
+        100 /var/lib/dpkg/status
+     1:9.6p1-3ubuntu13 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libproc2-0:
+  Installed: 2:4.0.4-4ubuntu3.2
+  Candidate: 2:4.0.4-4ubuntu3.3
+  Version table:
+     2:4.0.4-4ubuntu3.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2:4.0.4-4ubuntu3.2 100
+        100 /var/lib/dpkg/status
+     2:4.0.4-4ubuntu3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+procps:
+  Installed: 2:4.0.4-4ubuntu3.2
+  Candidate: 2:4.0.4-4ubuntu3.3
+  Version table:
+     2:4.0.4-4ubuntu3.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2:4.0.4-4ubuntu3.2 100
+        100 /var/lib/dpkg/status
+     2:4.0.4-4ubuntu3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+ubuntu-drivers-common:
+  Installed: 1:0.9.7.6ubuntu3.5
+  Candidate: 1:0.9.7.6ubuntu3.7
+  Version table:
+     1:0.9.7.6ubuntu3.7 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1:0.9.7.6ubuntu3.5 100
+        100 /var/lib/dpkg/status
+     1:0.9.7.6ubuntu3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+iproute2:
+  Installed: 6.1.0-1ubuntu6.2
+  Candidate: 6.1.0-1ubuntu6.4
+  Version table:
+     6.1.0-1ubuntu6.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 6.1.0-1ubuntu6.2 100
+        100 /var/lib/dpkg/status
+     6.1.0-1ubuntu6 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+open-vm-tools:
+  Installed: 2:12.5.0-1~ubuntu0.24.04.2
+  Candidate: 2:13.0.10-0ubuntu0.24.04.2
+  Version table:
+     2:13.0.10-0ubuntu0.24.04.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2:12.5.0-1~ubuntu0.24.04.2 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2:12.3.5-5build3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+krb5-locales:
+  Installed: 1.20.1-6ubuntu2.7
+  Candidate: 1.20.1-6ubuntu2.10
+  Version table:
+     1.20.1-6ubuntu2.10 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.20.1-6ubuntu2.7 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     1.20.1-6ubuntu2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+netplan-generator:
+  Installed: 1.1.2-8ubuntu1~24.04.1
+  Candidate: 1.1.2-8ubuntu1~24.04.3
+  Version table:
+     1.1.2-8ubuntu1~24.04.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.1.2-8ubuntu1~24.04.1 100
+        100 /var/lib/dpkg/status
+     1.0-2ubuntu1.2 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     1.0-2ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python3-netplan:
+  Installed: 1.1.2-8ubuntu1~24.04.1
+  Candidate: 1.1.2-8ubuntu1~24.04.3
+  Version table:
+     1.1.2-8ubuntu1~24.04.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.1.2-8ubuntu1~24.04.1 100
+        100 /var/lib/dpkg/status
+     1.0-2ubuntu1.2 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     1.0-2ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+netplan.io:
+  Installed: 1.1.2-8ubuntu1~24.04.1
+  Candidate: 1.1.2-8ubuntu1~24.04.3
+  Version table:
+     1.1.2-8ubuntu1~24.04.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.1.2-8ubuntu1~24.04.1 100
+        100 /var/lib/dpkg/status
+     1.0-2ubuntu1.2 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     1.0-2ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libnetplan1:
+  Installed: 1.1.2-8ubuntu1~24.04.1
+  Candidate: 1.1.2-8ubuntu1~24.04.3
+  Version table:
+     1.1.2-8ubuntu1~24.04.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.1.2-8ubuntu1~24.04.1 100
+        100 /var/lib/dpkg/status
+     1.0-2ubuntu1.2 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     1.0-2ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+systemd-hwe-hwdb:
+  Installed: 255.1.6
+  Candidate: 255.1.7
+  Version table:
+     255.1.7 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 255.1.6 100
+        100 /var/lib/dpkg/status
+     255.1.3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+tzdata:
+  Installed: 2026c-0ubuntu0.24.04.1
+  Candidate: 2026e-0ubuntu0.24.04.1
+  Version table:
+     2026e-0ubuntu0.24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 2026c-0ubuntu0.24.04.1 100
+        100 /var/lib/dpkg/status
+     2024a-2ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+ubuntu-pro-client-l10n:
+  Installed: 37.2ubuntu~24.04.1
+  Candidate: 38ubuntu0~24.04
+  Version table:
+     38ubuntu0~24.04 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 37.2ubuntu~24.04.1 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     31.2.3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+ubuntu-pro-client:
+  Installed: 37.2ubuntu~24.04.1
+  Candidate: 38ubuntu0~24.04
+  Version table:
+     38ubuntu0~24.04 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 37.2ubuntu~24.04.1 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     31.2.3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+apparmor:
+  Installed: 4.0.1really4.0.1-0ubuntu0.24.04.5
+  Candidate: 4.0.1really4.0.1-0ubuntu0.24.04.9
+  Version table:
+     4.0.1really4.0.1-0ubuntu0.24.04.9 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 4.0.1really4.0.1-0ubuntu0.24.04.5 100
+        100 /var/lib/dpkg/status
+     4.0.0-beta3-0ubuntu3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+dmidecode:
+  Installed: 3.5-3ubuntu0.1
+  Candidate: 3.5-3ubuntu0.2
+  Version table:
+     3.5-3ubuntu0.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 3.5-3ubuntu0.1 100
+        100 /var/lib/dpkg/status
+     3.5-3build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+nftables:
+  Installed: 1.0.9-1build1
+  Candidate: 1.0.9-1ubuntu0.1
+  Version table:
+     1.0.9-1ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.0.9-1build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+libnftables1:
+  Installed: 1.0.9-1build1
+  Candidate: 1.0.9-1ubuntu0.1
+  Version table:
+     1.0.9-1ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.0.9-1build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+libplymouth5:
+  Installed: 24.004.60-1ubuntu7.1
+  Candidate: 24.004.60-1ubuntu7.2
+  Version table:
+     24.004.60-1ubuntu7.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 24.004.60-1ubuntu7.1 100
+        100 /var/lib/dpkg/status
+     24.004.60-1ubuntu7 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+lshw:
+  Installed: 02.19.git.2021.06.19.996aaad9c7-2build3
+  Candidate: 02.19.git.2021.06.19.996aaad9c7-2ubuntu0.24.04.1
+  Version table:
+     02.19.git.2021.06.19.996aaad9c7-2ubuntu0.24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 02.19.git.2021.06.19.996aaad9c7-2build3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+plymouth-theme-ubuntu-text:
+  Installed: 24.004.60-1ubuntu7.1
+  Candidate: 24.004.60-1ubuntu7.2
+  Version table:
+     24.004.60-1ubuntu7.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 24.004.60-1ubuntu7.1 100
+        100 /var/lib/dpkg/status
+     24.004.60-1ubuntu7 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+plymouth:
+  Installed: 24.004.60-1ubuntu7.1
+  Candidate: 24.004.60-1ubuntu7.2
+  Version table:
+     24.004.60-1ubuntu7.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 24.004.60-1ubuntu7.1 100
+        100 /var/lib/dpkg/status
+     24.004.60-1ubuntu7 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+ubuntu-release-upgrader-core:
+  Installed: 1:24.04.28
+  Candidate: 1:24.04.29
+  Version table:
+     1:24.04.29 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1:24.04.28 100
+        100 /var/lib/dpkg/status
+     1:24.04.16 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python3-distupgrade:
+  Installed: 1:24.04.28
+  Candidate: 1:24.04.29
+  Version table:
+     1:24.04.29 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1:24.04.28 100
+        100 /var/lib/dpkg/status
+     1:24.04.16 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+xz-utils:
+  Installed: 5.6.1+really5.4.5-1ubuntu0.3
+  Candidate: 5.6.1+really5.4.5-1ubuntu0.4
+  Version table:
+     5.6.1+really5.4.5-1ubuntu0.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 5.6.1+really5.4.5-1ubuntu0.3 100
+        100 /var/lib/dpkg/status
+     5.6.1+really5.4.5-1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+tmux:
+  Installed: 3.4-1ubuntu0.1
+  Candidate: 3.4-1ubuntu0.2
+  Version table:
+     3.4-1ubuntu0.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 3.4-1ubuntu0.1 100
+        100 /var/lib/dpkg/status
+     3.4-1build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+byobu:
+  Installed: 6.11-0ubuntu1
+  Candidate: 6.11-0ubuntu1.1
+  Version table:
+     6.11-0ubuntu1.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 6.11-0ubuntu1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+kubernetes-cni:
+  Installed: 1.8.0-1.1
+  Candidate: 1.9.1-1.1
+  Version table:
+     1.9.1-1.1 500
+        500 https://pkgs.k8s.io/core:/stable:/v1.36/deb  Packages
+ *** 1.8.0-1.1 100
+        100 /var/lib/dpkg/status
+libbrotli1:
+  Installed: 1.1.0-2build2
+  Candidate: 1.1.0-2ubuntu0.1
+  Version table:
+     1.1.0-2ubuntu0.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 1.1.0-2build2 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+libjcat1:
+  Installed: 0.2.0-2build3
+  Candidate: 0.2.3-1~ubuntu0.24.04.1
+  Version table:
+     0.2.3-1~ubuntu0.24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 0.2.0-2build3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+libfwupd2:
+  Installed: 1.9.33-0ubuntu1~24.04.1ubuntu1
+  Candidate: 1.9.34-0ubuntu1~24.04.1
+  Version table:
+     1.9.34-0ubuntu1~24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 1.9.33-0ubuntu1~24.04.1ubuntu1 100
+        100 /var/lib/dpkg/status
+     1.9.16-1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libnss3:
+  Installed: 2:3.98-1ubuntu0.2
+  Candidate: 2:3.98-1ubuntu0.3
+  Version table:
+     2:3.98-1ubuntu0.3 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 2:3.98-1ubuntu0.2 100
+        100 /var/lib/dpkg/status
+     2:3.98-1build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+libxmlb2:
+  Installed: 0.3.18-1
+  Candidate: 0.3.24-1~ubuntu0.24.04.1
+  Version table:
+     0.3.24-1~ubuntu0.24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 0.3.18-1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+        100 /var/lib/dpkg/status
+linux-base:
+  Installed: 4.5ubuntu9+24.04.1
+  Candidate: 4.5ubuntu9+24.04.2
+  Version table:
+     4.5ubuntu9+24.04.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 4.5ubuntu9+24.04.1 100
+        100 /var/lib/dpkg/status
+     4.5ubuntu9 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python3-jwt:
+  Installed: 2.7.0-1ubuntu0.3
+  Candidate: 2.7.0-1ubuntu0.4
+  Version table:
+     2.7.0-1ubuntu0.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+ *** 2.7.0-1ubuntu0.3 100
+        100 /var/lib/dpkg/status
+     2.7.0-1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+software-properties-common:
+  Installed: 0.99.49.3
+  Candidate: 0.99.49.4
+  Version table:
+     0.99.49.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 0.99.49.3 100
+        100 /var/lib/dpkg/status
+     0.99.48 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+python3-software-properties:
+  Installed: 0.99.49.3
+  Candidate: 0.99.49.4
+  Version table:
+     0.99.49.4 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 0.99.49.3 100
+        100 /var/lib/dpkg/status
+     0.99.48 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+snapd:
+  Installed: 2.76+ubuntu24.04.1
+  Candidate: 2.77.1+ubuntu24.04
+  Version table:
+     2.77.1+ubuntu24.04 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 2.76+ubuntu24.04.1 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     2.62+24.04build1 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+sosreport:
+  Installed: 4.9.2-0ubuntu0~24.04.1
+  Candidate: 4.11.2-0ubuntu0~24.04.1
+  Version table:
+     4.11.2-0ubuntu0~24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 4.9.2-0ubuntu0~24.04.1 100
+        100 /var/lib/dpkg/status
+     4.5.6-0ubuntu4 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+cloud-init:
+  Installed: 25.2-0ubuntu1~24.04.1
+  Candidate: 26.2-0ubuntu1~24.04.2
+  Version table:
+     26.2-0ubuntu1~24.04.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 25.2-0ubuntu1~24.04.1 100
+        100 /var/lib/dpkg/status
+     25.1.4-0ubuntu0~24.04.1 500
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+     24.1.3-0ubuntu3 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+kpartx:
+  Installed: 0.9.4-5ubuntu8.1
+  Candidate: 0.9.4-5ubuntu8.2
+  Version table:
+     0.9.4-5ubuntu8.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 0.9.4-5ubuntu8.1 100
+        100 /var/lib/dpkg/status
+     0.9.4-5ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+multipath-tools:
+  Installed: 0.9.4-5ubuntu8.1
+  Candidate: 0.9.4-5ubuntu8.2
+  Version table:
+     0.9.4-5ubuntu8.2 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+ *** 0.9.4-5ubuntu8.1 100
+        100 /var/lib/dpkg/status
+     0.9.4-5ubuntu8 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages

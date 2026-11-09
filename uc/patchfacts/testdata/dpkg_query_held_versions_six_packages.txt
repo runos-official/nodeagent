@@ -1,0 +1,6 @@
+containerd 2.2.1-0ubuntu1~24.04.4 installed
+cri-tools 1.36.0-1.1 installed
+kubeadm 1.36.5-1.1 installed
+kubectl 1.36.5-1.1 installed
+kubelet 1.36.5-1.1 installed
+kubernetes-cni 1.8.0-1.1 installed
