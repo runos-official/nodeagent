@@ -2,7 +2,10 @@ package agentstream
 
 import (
 	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
+	"time"
 )
 
 // TestHeartbeatCarriesRolesKnown pins the heartbeat wire contract that R6 turned
@@ -11,6 +14,9 @@ import (
 // read the node object and is carrying its last known role, so a write would
 // demote a live control plane on a transient read failure.
 func TestHeartbeatCarriesRolesKnown(t *testing.T) {
+	if nodeAgentHeartbeatInterval != 5*time.Second {
+		t.Fatalf("heartbeat interval = %s, want 5s", nodeAgentHeartbeatInterval)
+	}
 	raw, err := json.Marshal(heartbeatRequest{
 		ExternalIpAddress: "203.0.113.7",
 		IsCp:              true,
@@ -28,10 +34,14 @@ func TestHeartbeatCarriesRolesKnown(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	for _, field := range []string{"externalIpAddress", "isCp", "isWorker", "status", "version", "rolesKnown"} {
-		if _, ok := decoded[field]; !ok {
-			t.Errorf("heartbeat payload is missing %q; nodeward decodes that exact name", field)
-		}
+	gotFields := make([]string, 0, len(decoded))
+	for field := range decoded {
+		gotFields = append(gotFields, field)
+	}
+	sort.Strings(gotFields)
+	wantFields := []string{"externalIpAddress", "isCp", "isWorker", "rolesKnown", "status", "version"}
+	if !reflect.DeepEqual(gotFields, wantFields) {
+		t.Errorf("heartbeat fields = %v, want exactly %v", gotFields, wantFields)
 	}
 
 	if decoded["rolesKnown"] != true {

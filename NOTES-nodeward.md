@@ -97,3 +97,43 @@ and the gate silently reads nothing. This repository holds only the generated fi
 cover its own half: `go test ./l2sec/` holds the Go struct tag and the serialized descriptor to each
 other for every field, and `make proto-check` refuses a generated file that protoc-gen-go would not
 produce from its own descriptor. Neither guard can see nodeward's copy.
+
+## Node patch facts outbound message
+
+Nodeward must register `NodePatchFactsToServer` in its instruction map. A missing map entry silently drops every report.
+
+The message uses the existing agent-request lane. Its `JsonB64` field contains base64-encoded JSON with these 17 fields:
+
+```text
+collectedAt
+runningKernel
+installedKernels
+newestInstalledKernel
+rebootRequired
+rebootRequiredSince
+rebootTriggerPackages
+securityUpdateCount
+securityUpdatePackages
+securityUpdatesStale
+packageMetadataAgeSeconds
+packageMetadataSource
+lastPackageRunAt
+bootTime
+automaticUpdateUnitState
+heldPackages
+fieldErrors
+```
+
+Nodeward must reply on the same tag with this base64-encoded JSON shape:
+
+```json
+{"accepted": true, "retryable": false, "message": ""}
+```
+
+`accepted: true` means that Nodeward accepted the record for forwarding. The reply does not mean that Conductor stored the record.
+
+Use `accepted: false, retryable: true` for a temporary refusal, such as a full queue. The agent retries with jitter capped at 30 seconds.
+
+Use `accepted: false, retryable: false` for a permanent validation refusal. Put the invalid field or reason in `message`. The agent logs the reason, drops that record, and waits for a fresh sample.
+
+The agent treats a send error, timeout, undecodable reply, or retryable refusal as a retry. One pending record slot keeps only the newest sample.

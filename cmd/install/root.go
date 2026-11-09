@@ -1,6 +1,7 @@
 package install
 
 import (
+	"github.com/runos-official/nodeagent/agentstream"
 	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/roslog"
 	registernode "github.com/runos-official/nodeagent/uc/install"
@@ -74,6 +75,7 @@ log lines automatically when stdout is not a terminal.`,
 	// RunE (not Run) so a failed install propagates a non-zero exit code to the
 	// installer script instead of silently exiting 0.
 	RunE: func(cmd *cobra.Command, args []string) error {
+		defer agentstream.MarkNodePatchFactsAfterInstall()
 		// Install Wireguard
 		banner("Installing WireGuard")
 		if err := registernode.InstallVpn(); err != nil {
