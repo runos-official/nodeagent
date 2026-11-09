@@ -53,3 +53,4 @@ Nothing else was edited.
 | --- | --- |
 | `contractd_apt_mark_showhold.txt` | the hold list of the objective's Contract D, written in `apt-mark showhold`'s own format. No node holds that whole set yet, so it could not be captured. It is what a node will report once the install holds come back, and it is the fixture that proves a held security update drops out of the count. |
 | `degraded_node_record.json` | not an input. It is the record the collector produces for a degraded node, kept as the shared fixture that the store, the carrier and the read endpoint of this objective all use. Regenerate it with `UPDATE_GOLDEN=1 go test ./uc/patchfacts/`. |
+| `lock_held_slow_pass_record.json` | not an input. It is the shared record for a slow pass that skips refresh because a package lock is held. The readable metadata age and count remain values, without a field error. |

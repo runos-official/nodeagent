@@ -96,11 +96,14 @@ func (c *Collector) Collect(opts Options) (Record, error) {
 
 	// The lock check runs in its own step BEFORE the refresh, so a refusal
 	// never follows a write. The refresh then happens only on a slow pass.
-	c.refreshMetadata(&rec, opts)
+	refreshNote := c.refreshMetadata(opts)
 
 	// The age is read after any refresh, so the count is reported with the age
 	// of the metadata it was actually computed from.
 	ageKnown := c.collectMetadataAge(&rec)
+	if !ageKnown && refreshNote != "" {
+		rec.FieldErrors["packageMetadataAgeSeconds"] += "; " + refreshNote
+	}
 	switch {
 	case !ageKnown:
 		// collectMetadataAge already said why the count is not reported.
@@ -272,25 +275,25 @@ func (c *Collector) collectUnitState(rec *Record) {
 // no package manager lock is held.
 //
 // The collector stands down when a lock is held rather than waiting it out. It
-// then reports the count from the metadata as the metadata already stands, with
-// that metadata's own age, which is exactly the previous count with its age and
-// needs no state across passes.
-func (c *Collector) refreshMetadata(rec *Record, opts Options) {
+// then reports the count from the metadata as the metadata already stands.
+// A refresh outcome is attached only when the metadata age remains unknown.
+// A successful age read never gets a FieldErrors entry.
+func (c *Collector) refreshMetadata(opts Options) string {
 	if !opts.SlowPass {
-		return
+		return ""
 	}
 	held, who, err := c.lockHeld()
 	if err != nil {
-		rec.noteFieldError("packageMetadataAgeSeconds", fmt.Sprintf("cannot probe the package manager locks, so the metadata was not refreshed: %v", err))
-		return
+		return fmt.Sprintf("package metadata was not refreshed because the package lock state could not be read: %v", err)
 	}
 	if held {
-		rec.noteFieldError("packageMetadataAgeSeconds", fmt.Sprintf("another package manager holds %s, so the metadata was not refreshed and the count below came from the metadata as it stands", who))
-		return
+		return fmt.Sprintf("package metadata was not refreshed because another package manager holds %s", who)
 	}
-	if out, err := c.exec(cmdAptRefresh); err != nil {
-		rec.noteFieldError("packageMetadataAgeSeconds", fmt.Sprintf("the package metadata refresh failed, so the count below came from the metadata as it stands: %v: %s", err, firstLine(out)))
+	out, err := c.exec(cmdAptRefresh)
+	if err != nil {
+		return fmt.Sprintf("package metadata refresh failed: %v: %s", err, firstLine(out))
 	}
+	return ""
 }
 
 // collectMetadataAge fills the age, its source and the stale flag. It reports

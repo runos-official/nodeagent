@@ -60,7 +60,7 @@ import re
 import subprocess
 import sys
 
-LEAKCHECK_VERSION = "1.3.0"
+LEAKCHECK_VERSION = "1.3.1"
 
 # ---------------------------------------------------------------------------
 # Credential shapes. Kept in step with CREDENTIAL in scripts/release.sh.
@@ -269,26 +269,21 @@ def is_ipv4_netmask(addr) -> bool:
     return inverted & (inverted + 1) == 0
 
 
-def is_reserved_zero_network(addr) -> bool:
-    """True for an IPv4 address in 0.0.0.0/8.
+def is_apt_package_version_context(path: str, token: str, text: str) -> bool:
+    """True when apt output identifies token as a Debian package version.
 
-    1.3.0. RFC 1122 reserves the whole of 0.0.0.0/8 as "this network". No host
-    is ever assigned an address in it and no router forwards one, so a leak
-    cannot hide there: a reader who finds 0.99.49.3 learns nothing about any
-    machine, because no machine can have it.
-
-    The range exists in this file because a DOTTED VERSION lands in it. A
-    Debian package version such as 0.99.49.3 is four numbers under 256, which
-    is the one shape the IPv4 pattern cannot tell apart from an address, and
-    captured package manager output is full of them. Before this rule they were
-    ratcheted into the baseline, which spent rows on lines that name nobody and
-    trained a reader to skim the baseline instead of reading it.
-
-    The rule is narrow on purpose. It covers 0.x.y.z and nothing else: the
-    unspecified address 0.0.0.0 was already allowed, and widening to any other
-    first octet would cover addresses a real host can hold.
+    1.3.1. A four-part Debian version can have the same shape as an IPv4
+    address. The exception uses apt's line grammar instead of an address range.
+    Arbitrary addresses in 0.0.0.0/8 therefore stay reportable.
     """
-    return addr.version == 4 and int(addr) >> 24 == 0
+    quoted = re.escape(token)
+    patterns = [
+        rf"^\s*(?:Installed|Candidate):\s+{quoted}\s*$",
+        rf"^\s*(?:Inst|Conf)\s+.*(?:\[{quoted}\]|\({quoted}(?:\s|\)))",
+    ]
+    if os.path.basename(path) == "apt_cache_policy_packages.txt":
+        patterns.append(rf"^\s*(?:\*\*\*\s+)?{quoted}\s+\d+\s*$")
+    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def classify_ip(token: str):
@@ -301,8 +296,6 @@ def classify_ip(token: str):
         if addr.version == net.version and addr in net:
             return None
     if is_ipv4_netmask(addr):
-        return None
-    if is_reserved_zero_network(addr):
         return None
     return addr
 
@@ -324,6 +317,8 @@ def scan_line(path: str, lineno: int, text: str, patterns: list) -> list:
 
     for match in IPV4_CANDIDATE_RE.finditer(text):
         token = match.group(1)
+        if is_apt_package_version_context(path, token, text):
+            continue
         if classify_ip(token) is not None:
             findings.append(Finding(path, lineno, "ipv4", token, snippet))
 

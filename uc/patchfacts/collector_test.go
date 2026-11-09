@@ -255,8 +255,31 @@ func TestRefreshRunsOnTheSlowPassOnlyAndStandsDownOnALock(t *testing.T) {
 		if rec.PackageMetadataAgeSeconds == nil || *rec.PackageMetadataAgeSeconds != 507739 {
 			t.Errorf("PackageMetadataAgeSeconds = %v, want 507739", rec.PackageMetadataAgeSeconds)
 		}
-		if !strings.Contains(rec.FieldErrors["packageMetadataAgeSeconds"], "/var/lib/dpkg/lock-frontend") {
-			t.Errorf("the field error does not name the held lock: %q", rec.FieldErrors["packageMetadataAgeSeconds"])
+		if rec.FieldErrors["packageMetadataAgeSeconds"] != "" {
+			t.Errorf("the readable metadata age has a field error: %q", rec.FieldErrors["packageMetadataAgeSeconds"])
+		}
+	})
+
+	t.Run("a held lock does not hide the reason an age is unknown", func(t *testing.T) {
+		node := capturedNode(t)
+		node.lockIsHeld = true
+		node.lockHolder = "/var/lib/dpkg/lock-frontend"
+		delete(node.modTimes, pathUpdateSuccessStamp)
+		rec, err := node.collector().Collect(Options{SlowPass: true})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if rec.PackageMetadataAgeSeconds != nil {
+			t.Errorf("PackageMetadataAgeSeconds = %v, want nil", rec.PackageMetadataAgeSeconds)
+		}
+		if got := rec.FieldErrors["packageMetadataAgeSeconds"]; !strings.Contains(got, "neither ") {
+			t.Errorf("the field error does not carry the age read failure: %q", got)
+		}
+		if got := rec.FieldErrors["packageMetadataAgeSeconds"]; !strings.Contains(got, "/var/lib/dpkg/lock-frontend") {
+			t.Errorf("the field error does not carry the refresh outcome: %q", got)
+		}
+		if strings.Contains(rec.FieldErrors["packageMetadataAgeSeconds"], "count below") {
+			t.Errorf("the field error claims that an absent count exists: %q", rec.FieldErrors["packageMetadataAgeSeconds"])
 		}
 	})
 
@@ -283,8 +306,29 @@ func TestRefreshRunsOnTheSlowPassOnlyAndStandsDownOnALock(t *testing.T) {
 		if node.refreshCalls != 0 {
 			t.Error("the refresh ran although the lock probe failed")
 		}
-		if !strings.Contains(rec.FieldErrors["packageMetadataAgeSeconds"], "permission denied") {
-			t.Errorf("the field error does not carry the probe failure: %q", rec.FieldErrors["packageMetadataAgeSeconds"])
+		if rec.PackageMetadataAgeSeconds == nil {
+			t.Fatal("PackageMetadataAgeSeconds is nil although the age read succeeded")
+		}
+		if rec.FieldErrors["packageMetadataAgeSeconds"] != "" {
+			t.Errorf("the readable metadata age has a field error: %q", rec.FieldErrors["packageMetadataAgeSeconds"])
+		}
+	})
+
+	t.Run("a failed refresh does not make a readable age unknown", func(t *testing.T) {
+		node := capturedNode(t)
+		node.refreshErr = errors.New("repository unavailable")
+		rec, err := node.collector().Collect(Options{SlowPass: true})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if node.refreshCalls != 1 {
+			t.Errorf("the refresh ran %d times, want 1", node.refreshCalls)
+		}
+		if rec.PackageMetadataAgeSeconds == nil {
+			t.Fatal("PackageMetadataAgeSeconds is nil although the age read succeeded")
+		}
+		if rec.FieldErrors["packageMetadataAgeSeconds"] != "" {
+			t.Errorf("the readable metadata age has a field error: %q", rec.FieldErrors["packageMetadataAgeSeconds"])
 		}
 	})
 }
@@ -336,6 +380,44 @@ func TestAutomaticUpdateUnitState(t *testing.T) {
 		}
 		if rec.FieldErrors["automaticUpdateUnitState"] == "" {
 			t.Error("FieldErrors has no entry for automaticUpdateUnitState")
+		}
+	})
+
+	t.Run("disabled timers and static services give unknown", func(t *testing.T) {
+		node := capturedNode(t)
+		units := map[string]string{}
+		for _, unit := range automaticUpdateUnits {
+			state := "disabled"
+			if strings.HasSuffix(unit, ".service") {
+				state = "static"
+			}
+			units[unit] = fmt.Sprintf("Id=%s\nLoadState=loaded\nActiveState=inactive\nUnitFileState=%s\n", unit, state)
+		}
+		node.unitOut = units
+		rec, err := node.collector().Collect(Options{})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if rec.AutomaticUpdateUnitState != UnitStateUnknown {
+			t.Errorf("state = %q, want %q: no unit schedules automatic work",
+				rec.AutomaticUpdateUnitState, UnitStateUnknown)
+		}
+	})
+
+	t.Run("an active static service gives enabled outside RunOS", func(t *testing.T) {
+		node := capturedNode(t)
+		units := map[string]string{}
+		for _, unit := range automaticUpdateUnits {
+			units[unit] = fmt.Sprintf("Id=%s\nLoadState=loaded\nActiveState=inactive\nUnitFileState=disabled\n", unit)
+		}
+		units["apt-daily-upgrade.service"] = "Id=apt-daily-upgrade.service\nLoadState=loaded\nActiveState=active\nUnitFileState=static\n"
+		node.unitOut = units
+		rec, err := node.collector().Collect(Options{})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if rec.AutomaticUpdateUnitState != UnitStateEnabledOutsideRunOS {
+			t.Errorf("state = %q, want %q", rec.AutomaticUpdateUnitState, UnitStateEnabledOutsideRunOS)
 		}
 	})
 
@@ -609,6 +691,42 @@ func TestDegradedNodeFixture(t *testing.T) {
 	}
 	if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
 		t.Errorf("the shared degraded-node record changed.\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// The shared lock-held fixture proves that a skipped refresh does not turn a
+// readable metadata age into an unknown field for later objective stories.
+func TestLockHeldSlowPassFixture(t *testing.T) {
+	node := capturedNode(t)
+	node.lockIsHeld = true
+	node.lockHolder = "/var/lib/dpkg/lock-frontend"
+
+	rec, err := node.collector().Collect(Options{SlowPass: true})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if node.refreshCalls != 0 {
+		t.Errorf("the refresh ran %d times although a lock was held", node.refreshCalls)
+	}
+	if rec.PackageMetadataAgeSeconds == nil {
+		t.Fatal("PackageMetadataAgeSeconds is nil")
+	}
+	if rec.FieldErrors["packageMetadataAgeSeconds"] != "" {
+		t.Errorf("the readable metadata age has a field error: %q", rec.FieldErrors["packageMetadataAgeSeconds"])
+	}
+
+	got, err := json.MarshalIndent(rec, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got = append(got, '\n')
+	const golden = "testdata/lock_held_slow_pass_record.json"
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read golden: %v\ngot:\n%s", err, got)
+	}
+	if !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(want)) {
+		t.Errorf("the shared lock-held record changed.\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

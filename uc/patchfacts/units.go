@@ -19,13 +19,13 @@ func (u unitState) masked() bool {
 	return u.loadState == "masked" || u.unitFileState == "masked"
 }
 
-// couldRun reports whether this unit is in a state systemd would act on.
+// couldRun reports whether this unit schedules work or is running now.
 func (u unitState) couldRun() bool {
 	if u.masked() {
 		return false
 	}
 	switch u.unitFileState {
-	case "enabled", "enabled-runtime", "static", "indirect", "generated":
+	case "enabled", "enabled-runtime":
 		return true
 	}
 	return u.activeState == "active" || u.activeState == "activating"

@@ -1,0 +1,60 @@
+{
+  "collectedAt": "2026-11-08T18:52:28Z",
+  "runningKernel": "6.8.0-147-generic",
+  "installedKernels": [
+    "6.8.0-147-generic"
+  ],
+  "newestInstalledKernel": "6.8.0-147-generic",
+  "rebootRequired": false,
+  "rebootRequiredSince": null,
+  "rebootTriggerPackages": [],
+  "securityUpdateCount": 25,
+  "securityUpdatePackages": [
+    "distro-info-data",
+    "git",
+    "git-man",
+    "haproxy",
+    "libbrotli1",
+    "liblzma5",
+    "libnss-systemd",
+    "libnss3",
+    "libpam-systemd",
+    "libsystemd-shared",
+    "libsystemd0",
+    "libudev1",
+    "openssh-client",
+    "openssh-server",
+    "openssh-sftp-server",
+    "python3-jwt",
+    "systemd",
+    "systemd-dev",
+    "systemd-resolved",
+    "systemd-sysv",
+    "systemd-timesyncd",
+    "tzdata",
+    "udev",
+    "xz-utils",
+    "zlib1g"
+  ],
+  "securityUpdatesStale": true,
+  "packageMetadataAgeSeconds": 507739,
+  "packageMetadataSource": "/var/lib/apt/periodic/update-success-stamp",
+  "lastPackageRunAt": "2026-11-02T21:50:16Z",
+  "bootTime": "2026-11-03T10:15:29Z",
+  "automaticUpdateUnitState": "masked",
+  "heldPackages": [
+    {
+      "name": "kubeadm",
+      "version": "1.36.5-1.1"
+    },
+    {
+      "name": "kubectl",
+      "version": "1.36.5-1.1"
+    },
+    {
+      "name": "kubelet",
+      "version": "1.36.5-1.1"
+    }
+  ],
+  "fieldErrors": null
+}
