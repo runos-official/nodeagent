@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 type fakePackageRunner struct {
@@ -217,11 +219,13 @@ func TestRunPackagesMovesOnlyNewerRevisionOfSameUpstream(t *testing.T) {
 		candidate  string
 		wantMove   bool
 		wantReason string
+		wantError  bool
 	}{
 		{name: "newer revision", installed: "2.8.5-1ubuntu3", candidate: "2.8.5-1ubuntu4", wantMove: true},
 		{name: "newer upstream", installed: "2.8.5-1ubuntu3", candidate: "2.9.0-1ubuntu1", wantReason: reasonNotNewerRevision},
 		{name: "older revision", installed: "2.8.5-1ubuntu4", candidate: "2.8.5-1ubuntu3", wantReason: reasonNotNewerRevision},
-		{name: "unreadable candidate", installed: "2.8.5-1ubuntu3", candidate: "not-a-version", wantReason: reasonUnreadableVersion},
+		{name: "unreadable candidate", installed: "2.8.5-1ubuntu3", candidate: "not-a-version", wantReason: reasonUnreadableVersion, wantError: true},
+		{name: "unreadable installed", installed: "not-a-version", candidate: "2.8.5-1ubuntu4", wantReason: reasonUnreadableVersion, wantError: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,8 +235,15 @@ func TestRunPackagesMovesOnlyNewerRevisionOfSameUpstream(t *testing.T) {
 			runner.held["containerd"] = true
 
 			report, err := runPackages(runner, []string{"containerd"}, false)
-			if err != nil {
-				t.Fatalf("runPackages() error = %v", err)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("runPackages() error = %v, want error %v", err, tc.wantError)
+			}
+			wantStatus := statusCompleted
+			if tc.wantError {
+				wantStatus = statusFailed
+			}
+			if report.Status != wantStatus {
+				t.Errorf("status = %q, want %q", report.Status, wantStatus)
 			}
 			got := report.Packages[0]
 			if got.Moved != tc.wantMove || got.Reason != tc.wantReason {
@@ -331,5 +342,45 @@ func TestPackagesCommandEmitsOneJSONObject(t *testing.T) {
 	want := `{"status":"completed","packages":[{"name":"containerd","installedVersion":"1.7.24-1ubuntu1","candidateVersion":"1.7.24-1ubuntu2","moved":true,"heldAfter":true}]}` + "\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestPackagesCommandFailsOnUnreadableCandidateWithoutMutation(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		name := "apply"
+		if dryRun {
+			name = "dry-run"
+		}
+		t.Run(name, func(t *testing.T) {
+			runner := newFakePackageRunner()
+			runner.installed["containerd"] = "1.7.24-1ubuntu1"
+			runner.candidate["containerd"] = "not-a-version"
+			runner.held["containerd"] = true
+
+			cmd := &cobra.Command{Use: "runos", SilenceUsage: true, SilenceErrors: true}
+			cmd.AddCommand(newRootCmd(runner))
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			args := []string{"maintenance", "packages", "--packages", "containerd", "--json"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); err == nil {
+				t.Fatal("Execute() error = nil, want an unreadable version failure")
+			}
+			want := `{"status":"failed","packages":[{"name":"containerd","installedVersion":"1.7.24-1ubuntu1","candidateVersion":"not-a-version","moved":false,"reason":"unreadable-version","heldAfter":true}]}` + "\n"
+			if got := stdout.String(); got != want {
+				t.Errorf("stdout = %q, want %q", got, want)
+			}
+			if !strings.Contains(stderr.String(), "not-a-version") {
+				t.Errorf("stderr = %q, want the unreadable version diagnostic", stderr.String())
+			}
+			wantCalls := []string{"installed:containerd", "candidate:containerd", "held:containerd"}
+			if !reflect.DeepEqual(runner.calls, wantCalls) {
+				t.Errorf("calls = %#v, want only reads %#v", runner.calls, wantCalls)
+			}
+		})
 	}
 }

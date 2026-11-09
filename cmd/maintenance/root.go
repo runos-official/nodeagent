@@ -224,7 +224,7 @@ func runPackage(runner packageRunner, name string, dryRun bool) (result packageR
 	if err != nil {
 		result.Reason = reasonUnreadableVersion
 		result.diagnostic = err.Error()
-		return finishWithoutMutation(runner, result, nil)
+		return finishWithoutMutation(runner, result, fmt.Errorf("compare versions for %s: %w", name, err))
 	}
 	if !move {
 		result.Reason = reasonNotNewerRevision
