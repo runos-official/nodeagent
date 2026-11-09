@@ -384,6 +384,10 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 	// Start the heartbeat manager.
 	heartbeatDone := agentstream.StartNodeAgentHeartbeatManager(connCtx)
 
+	// Report patch state on its own slow schedule. The reporter never uses the
+	// five second heartbeat ticker.
+	patchFactsDone := agentstream.StartNodePatchFactsReporter(connCtx)
+
 	if err := backend.AddNodelog(3, "NodeAgentLifecycle", "Agent started"); err != nil {
 		roslog.E("Error adding nodelog", err)
 	}
@@ -406,6 +410,9 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 	case <-heartbeatDone:
 		roslog.I("Heartbeat manager stopped")
 		reason = "heartbeat_stopped"
+	case <-patchFactsDone:
+		roslog.I("Node patch facts reporter stopped")
+		reason = "patch_facts_stopped"
 	}
 	// Measure before the teardown wait, which can add up to 30 s.
 	upFor = time.Since(connectedAt)

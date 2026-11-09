@@ -1,6 +1,7 @@
 package agentstream
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/runos-official/nodeagent/commons"
 	pb "github.com/runos-official/nodeagent/l2sec"
+	"github.com/runos-official/nodeagent/uc/patchfacts"
 )
 
 // The UPGRADE_NODE_K8S handler runs as root. Its version fields must never
@@ -24,6 +26,36 @@ type upgradeRecorder struct {
 	target   string
 	commands []string
 	files    map[string]string
+}
+
+func captureUpgradePatchFacts(t *testing.T) <-chan patchfacts.Options {
+	t.Helper()
+	collected := make(chan patchfacts.Options, 1)
+	reporter := newPatchFactsReporter(
+		patchFactsCollectorFunc(func(opts patchfacts.Options) (patchfacts.Record, error) {
+			collected <- opts
+			return patchfacts.Record{}, nil
+		}),
+		func(context.Context, patchfacts.Record) patchFactsSendResult {
+			return patchFactsSendResult{kind: patchFactsAccepted}
+		},
+		func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	)
+	setActivePatchFactsReporter(reporter)
+	t.Cleanup(func() { clearActivePatchFactsReporter(reporter) })
+	return collected
+}
+
+func requireImmediateUpgradePatchFacts(t *testing.T, collected <-chan patchfacts.Options) {
+	t.Helper()
+	select {
+	case opts := <-collected:
+		if opts.SlowPass {
+			t.Error("the Kubernetes upgrade trigger used a slow pass")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the Kubernetes upgrade did not trigger patch facts")
+	}
 }
 
 func (r *upgradeRecorder) answer(command string) string {
@@ -156,6 +188,8 @@ func TestUpgradeNodeK8sRefusesARepoVersionForAnotherMinor(t *testing.T) {
 // A valid request from nodeward runs the same steps as before, with each
 // request value passed as one argument or as one quoted shell word.
 func TestUpgradeNodeK8sRunsTheExpectedCommandsForAValidRequest(t *testing.T) {
+	collected := captureUpgradePatchFacts(t)
+
 	rec := &upgradeRecorder{target: "1.35.9"}
 	rec.install(t)
 	req := validUpgradeRequest()
@@ -201,6 +235,7 @@ func TestUpgradeNodeK8sRunsTheExpectedCommandsForAValidRequest(t *testing.T) {
 	if got := rec.files["/etc/apt/sources.list.d/kubernetes.list"]; got != wantSource {
 		t.Errorf("kubernetes.list = %q, want %q", got, wantSource)
 	}
+	requireImmediateUpgradePatchFacts(t, collected)
 }
 
 // A worker node runs `kubeadm upgrade node`, not `upgrade apply`.
@@ -331,6 +366,7 @@ func TestUpgradeNodeK8sHoldsAgainWhenContainerdIsAlreadyAtTarget(t *testing.T) {
 // A failure in the middle of the upgrade must not leave the runtime packages
 // open: the hold comes back on the way out.
 func TestUpgradeNodeK8sRestoresTheHoldWhenTheUpgradeFails(t *testing.T) {
+	collected := captureUpgradePatchFacts(t)
 	rec := &upgradeRecorder{target: "1.35.9"}
 	rec.install(t)
 	record := upgradeRunShell
@@ -349,6 +385,7 @@ func TestUpgradeNodeK8sRestoresTheHoldWhenTheUpgradeFails(t *testing.T) {
 	if last := rec.commands[len(rec.commands)-1]; last != hold {
 		t.Fatalf("the last command must put the hold back, got %q", last)
 	}
+	requireImmediateUpgradePatchFacts(t, collected)
 }
 
 // If the hold cannot be released the upgrade stops before it installs anything.

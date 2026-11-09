@@ -84,6 +84,9 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	if err := validateUpgradeNodeK8sRequest(req); err != nil {
 		return failUpgrade(progress, "", tag, "refusing the upgrade: %v", err), nil
 	}
+	// The upgrade can change package state on success or on any later failure.
+	// Collect fresh facts after every accepted upgrade instruction.
+	defer TriggerNodePatchFactsReport()
 
 	previous := getCurrentKubeletVersion()
 	sendUpgradeLog(progress, fmt.Sprintf("Starting K8s upgrade %s → %s (isFirstCp=%t)",
