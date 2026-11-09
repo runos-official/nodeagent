@@ -58,10 +58,11 @@ func (*GetInstallVpnCommandsRequest) Descriptor() ([]byte, []int) {
 }
 
 type GetInstallCommandsRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	JsonB64FileList string                 `protobuf:"bytes,5,opt,name=jsonB64FileList,proto3" json:"jsonB64FileList,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	JsonB64FileList  string                 `protobuf:"bytes,5,opt,name=jsonB64FileList,proto3" json:"jsonB64FileList,omitempty"`
+	NodeAgentVersion string                 `protobuf:"bytes,10,opt,name=nodeAgentVersion,proto3" json:"nodeAgentVersion,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetInstallCommandsRequest) Reset() {
@@ -97,6 +98,13 @@ func (*GetInstallCommandsRequest) Descriptor() ([]byte, []int) {
 func (x *GetInstallCommandsRequest) GetJsonB64FileList() string {
 	if x != nil {
 		return x.JsonB64FileList
+	}
+	return ""
+}
+
+func (x *GetInstallCommandsRequest) GetNodeAgentVersion() string {
+	if x != nil {
+		return x.NodeAgentVersion
 	}
 	return ""
 }
@@ -1687,9 +1695,11 @@ var File_nodeward_l2sec_proto protoreflect.FileDescriptor
 const file_nodeward_l2sec_proto_rawDesc = "" +
 	"\n" +
 	"\x14nodeward_l2sec.proto\x12\x1arunos.nodeward.proto.l2sec\"\x1e\n" +
-	"\x1cGetInstallVpnCommandsRequest\"E\n" +
+	"\x1cGetInstallVpnCommandsRequest\"q\n" +
 	"\x19GetInstallCommandsRequest\x12(\n" +
-	"\x0fjsonB64FileList\x18\x05 \x01(\tR\x0fjsonB64FileList\"!\n" +
+	"\x0fjsonB64FileList\x18\x05 \x01(\tR\x0fjsonB64FileList\x12*\n" +
+	"\x10nodeAgentVersion\x18\n" +
+	" \x01(\tR\x10nodeAgentVersion\"!\n" +
 	"\x1fGetNodeRegistrationTokenRequest\"8\n" +
 	" GetNodeRegistrationTokenResponse\x12\x14\n" +
 	"\x05token\x18\x05 \x01(\tR\x05token\"\x96\x03\n" +

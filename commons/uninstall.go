@@ -227,8 +227,24 @@ func vmGroupFirewallCleanupSteps(confDir, applier, unitDir string) []string {
 // hold on every package the node install holds. It loops so one unknown or
 // already unheld name cannot stop the rest, and always exits 0.
 func unholdRunosPackagesCommand() string {
-	all := append(append([]string{}, KubernetesHeldPackages...), RuntimeHeldPackages...)
-	return "for p in " + strings.Join(all, " ") + "; do apt-mark unhold \"$p\" >/dev/null 2>&1 || true; done"
+	return "for p in " + strings.Join(HeldPackages, " ") + "; do apt-mark unhold \"$p\" >/dev/null 2>&1 || true; done"
+}
+
+// PurgeRunosPackagesCommand returns the command that purges every package RunOS
+// owns on the node. It sits beside unholdRunosPackagesCommand because the two
+// must agree: apt-get refuses a held package, so every name the unhold loop
+// releases has to appear here or a node delete leaves that package installed.
+//
+// It purges only the subset dpkg still tracks (installed or residual-config).
+// Once the Kubernetes apt repository is removed, which a best-effort step of the
+// uninstall does and which a PRIOR partial uninstall may already have done,
+// `apt-get remove kubeadm ...` fails with "Unable to locate package" (exit 100)
+// for the now-unknown names, and that wedged the uninstall on every retry.
+// dpkg-query lists the present names; if none remain the step is a clean no-op.
+func PurgeRunosPackagesCommand() string {
+	return "pkgs=$(dpkg-query -W -f='${Package}\\n' " + strings.Join(PurgePackages, " ") + " 2>/dev/null); " +
+		"if [ -n \"$pkgs\" ]; then DEBIAN_FRONTEND=noninteractive timeout 300 " + aptGet + " remove --purge $pkgs; " +
+		"else echo 'no RunOS packages present to purge'; fi"
 }
 
 // step runs a best-effort cleanup command. Its raw output is sent to the durable
@@ -438,16 +454,11 @@ func Uninstall(full bool) error {
 	// runtime packages to the Kubernetes trio.
 	step(unholdRunosPackagesCommand())
 	// Purge ALL RunOS-installed packages in a SINGLE non-interactive apt-get (was
-	// five separate, slow, lock-contending invocations — the long delay). Bounded
-	// by the dpkg-lock timeout above plus an overall `timeout`.
-	//
-	// Purge only the subset dpkg still tracks (installed or residual-config). Once
-	// the k8s apt repo is removed — a best-effort step just below, which a PRIOR
-	// partial uninstall may already have run — `apt-get remove kubeadm ...` fails
-	// with "Unable to locate package" (exit 100) for the now-unknown names, which
-	// wedged the uninstall on every retry. dpkg-query lists the present names; if
-	// none remain there is nothing to purge and the step is a clean no-op.
-	critical("purge packages", "pkgs=$(dpkg-query -W -f='${Package}\\n' dnsmasq kubeadm kubectl kubelet kubernetes-cni containerd wireguard wireguard-tools haproxy 2>/dev/null); if [ -n \"$pkgs\" ]; then DEBIAN_FRONTEND=noninteractive timeout 300 "+aptGet+" remove --purge $pkgs; else echo 'no RunOS packages present to purge'; fi")
+	// five separate, slow, lock-contending invocations, the long delay). Bounded by
+	// the dpkg-lock timeout above plus an overall `timeout`. The name list and the
+	// dpkg-query filter live in PurgeRunosPackagesCommand, beside the unhold loop
+	// the list must agree with.
+	critical("purge packages", PurgeRunosPackagesCommand())
 	step("DEBIAN_FRONTEND=noninteractive timeout 120 " + aptGet + " autoremove || true")
 	step("apt-get clean || true")
 	// Remove Kubernetes apt repo (best-effort)
