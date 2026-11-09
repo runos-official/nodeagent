@@ -45,7 +45,8 @@
 set -euo pipefail
 
 # ---- constants -------------------------------------------------------------
-INTEGRATION_BRANCH="dev"     # where work lands; gates run here; this commit is tagged
+INTEGRATION_BRANCH="${RUNOS_RELEASE_INTEGRATION_BRANCH-dev}"
+RECORD_REQUEST="${RUNOS_RELEASE_RECORD_BRANCH:-}"
 DEPLOYED_BRANCH="deployed"   # fast-forwarded to the shipped commit after a successful deploy
 PROD_BRANCH="main"           # the prod record: a final fast-forwards it, a candidate never does
 RELEASE_WORKFLOW="release.yml"
@@ -70,6 +71,24 @@ CHECK_ONLY="false"
 [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || \
   die "VERSION must look like v0.24.0 or v0.24.0-rc.1 (got '$VERSION')"
 
+# An objective candidate uses a separate source and record. Only Foreman's
+# check step may name that pair. Manual releases keep their dev defaults.
+SCOPED_RC="false"
+if [[ "$INTEGRATION_BRANCH" != dev || "$RECORD_REQUEST" == deployed-rc/* ]]; then
+  [[ "$CHECK_ONLY" == "true" && "$VERSION" =~ -rc\.[0-9]+$ ]] || \
+    die "an objective branch is only allowed for an RC in --check mode"
+  [[ "$INTEGRATION_BRANCH" =~ ^fm/obj-([1-9][0-9]*)-[a-z0-9-]+$ ]] || \
+    die "name a valid objective branch for the scoped release gate"
+  [[ "$RECORD_REQUEST" == "deployed-rc/obj-${BASH_REMATCH[1]}" ]] || \
+    die "an objective branch requires its matching record branch"
+  DEPLOYED_BRANCH="$RECORD_REQUEST"
+  SCOPED_RC="true"
+elif [[ -n "$RECORD_REQUEST" && "$RECORD_REQUEST" != "$DEPLOYED_BRANCH" && "$RECORD_REQUEST" != "$PROD_BRANCH" ]]; then
+  die "the release record must be deployed, main, or the matching objective record"
+elif [[ "$RECORD_REQUEST" == "$PROD_BRANCH" && "$VERSION" == *-* ]]; then
+  die "a release candidate cannot record on $PROD_BRANCH"
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -80,6 +99,9 @@ step "Preflight ($VERSION)"
 for tool in git go gh; do
   command -v "$tool" >/dev/null 2>&1 || die "required tool not found: $tool"
 done
+if [[ "$SCOPED_RC" == "true" && "$(git symbolic-ref --quiet --short HEAD)" != "$INTEGRATION_BRANCH" ]]; then
+  die "start the scoped release gate on the requested objective branch"
+fi
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated (run: gh auth login)"
 
 git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
@@ -107,30 +129,41 @@ ok "CHANGELOG has a $CHANGELOG_VERSION section"
 # Working tree must be clean.
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty; commit or stash first"
 
-# dev must exist and be in sync with origin. main is inspected only for a final,
-# below: a candidate never touches it.
+# The gate source must exist and match origin. A candidate leaves main alone.
 git fetch --quiet origin "$INTEGRATION_BRANCH"
 git rev-parse -q --verify "refs/heads/$INTEGRATION_BRANCH" >/dev/null || die "missing local branch: $INTEGRATION_BRANCH"
 [[ "$(git rev-parse "$INTEGRATION_BRANCH")" == "$(git rev-parse "origin/$INTEGRATION_BRANCH")" ]] || \
   die "$INTEGRATION_BRANCH is not in sync with origin/$INTEGRATION_BRANCH (push or pull first)"
 
-# If `deployed` exists, it must be fast-forwardable to dev and in sync with its
-# remote, so the post-deploy advance is a clean fast-forward.
-DEPLOYED_EXISTS="false"
-if git rev-parse -q --verify "refs/heads/$DEPLOYED_BRANCH" >/dev/null; then
-  DEPLOYED_EXISTS="true"
+# Check the same record that the release step advances. A scoped record can
+# exist on origin even when this pooled checkout has never fetched it.
+DEPLOYED_REF=""
+if [[ "$SCOPED_RC" == "true" ]]; then
+  record_status=0
+  git ls-remote --exit-code origin "refs/heads/$DEPLOYED_BRANCH" >/dev/null 2>&1 || record_status=$?
+  case "$record_status" in
+    0)
+      DEPLOYED_REF="refs/remotes/origin/$DEPLOYED_BRANCH"
+      git fetch --quiet origin "+refs/heads/$DEPLOYED_BRANCH:$DEPLOYED_REF" || \
+        die "cannot fetch the objective release record from origin"
+      ;;
+    2) ;;
+    *) die "cannot query origin for the objective release record" ;;
+  esac
+elif git rev-parse -q --verify "refs/heads/$DEPLOYED_BRANCH" >/dev/null; then
+  DEPLOYED_REF="refs/heads/$DEPLOYED_BRANCH"
   git fetch --quiet origin "$DEPLOYED_BRANCH" || true
   if git rev-parse -q --verify "origin/$DEPLOYED_BRANCH" >/dev/null; then
     [[ "$(git rev-parse "$DEPLOYED_BRANCH")" == "$(git rev-parse "origin/$DEPLOYED_BRANCH")" ]] || \
       die "$DEPLOYED_BRANCH is not in sync with origin/$DEPLOYED_BRANCH"
   fi
-  git merge-base --is-ancestor "$DEPLOYED_BRANCH" "$INTEGRATION_BRANCH" || \
-    die "$DEPLOYED_BRANCH cannot fast-forward to $INTEGRATION_BRANCH (histories diverged); reconcile manually"
 fi
-if [[ "$DEPLOYED_EXISTS" == "true" ]]; then
-  ok "dev clean & synced; $DEPLOYED_BRANCH present and fast-forwardable to dev"
+if [[ -n "$DEPLOYED_REF" ]]; then
+  git merge-base --is-ancestor "$DEPLOYED_REF" "$INTEGRATION_BRANCH" || \
+    die "$DEPLOYED_BRANCH cannot fast-forward to $INTEGRATION_BRANCH (histories diverged); reconcile manually"
+  ok "$INTEGRATION_BRANCH clean & synced; $DEPLOYED_BRANCH is fast-forwardable"
 else
-  ok "dev clean & synced; $DEPLOYED_BRANCH will be created on first deploy"
+  ok "$INTEGRATION_BRANCH clean & synced; $DEPLOYED_BRANCH will be created on first deploy"
 fi
 
 # A final fast-forwards main, so main must already be an ancestor of dev. Refusing
@@ -145,8 +178,8 @@ fi
 
 # Base for the deploy payload = last shipped point: the `deployed` branch if it
 # exists, else the most recent tag, else dev's root. Used by the sensitivity scan.
-if [[ "$DEPLOYED_EXISTS" == "true" ]]; then
-  PAYLOAD_BASE="$DEPLOYED_BRANCH"
+if [[ -n "$DEPLOYED_REF" ]]; then
+  PAYLOAD_BASE="$DEPLOYED_REF"
 elif PAYLOAD_BASE="$(git describe --tags --abbrev=0 "$INTEGRATION_BRANCH" 2>/dev/null)"; then
   :
 else
@@ -205,7 +238,7 @@ fi
 ok "no secret-shaped content in release payload"
 
 # =============================================================================
-# 2. Code gates (run against the dev tree that will be released)
+# 2. Code gates (run against the source tree that will be released)
 # =============================================================================
 ORIGINAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 git checkout --quiet "$INTEGRATION_BRANCH"
