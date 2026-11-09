@@ -7,6 +7,7 @@ import (
 	"github.com/runos-official/nodeagent/cmd/install"
 	"github.com/runos-official/nodeagent/cmd/kubeproxy"
 	"github.com/runos-official/nodeagent/cmd/logs"
+	"github.com/runos-official/nodeagent/cmd/maintenance"
 	"github.com/runos-official/nodeagent/cmd/preflight"
 	"github.com/runos-official/nodeagent/cmd/register"
 	"github.com/runos-official/nodeagent/cmd/setconfig"
@@ -63,6 +64,7 @@ func init() {
 	rootCmd.AddCommand(certificate.RootCmd)
 	rootCmd.AddCommand(status.RootCmd)
 	rootCmd.AddCommand(logs.RootCmd)
+	rootCmd.AddCommand(maintenance.RootCmd)
 }
 
 func initConfig() {
