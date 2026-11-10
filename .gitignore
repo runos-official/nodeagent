@@ -19,6 +19,9 @@ AGENTS.md
 /bin/
 /pkg/
 
+# protogen -print reference output (make proto-ref), never committed
+.proto-ref/
+
 # Dependency directories (remove these lines if you prefer to check in your vendor directory)
 vendor/
 Gopkg.lock
@@ -64,3 +67,10 @@ Desktop.ini
 secrets.yaml
 
 cache
+
+# Python bytecode from the repo scripts (scripts/leakcheck_test.py imports leakcheck)
+__pycache__/
+
+# Captured command output used as a test fixture. The *.log rule above would
+# swallow an apt history log, and a clean checkout then fails the tests.
+!uc/patchfacts/testdata/*.log

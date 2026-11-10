@@ -1,0 +1,92 @@
+The following packages have been kept back:
+90 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.
+Inst motd-news-config [13ubuntu10.4] (13ubuntu10.5 Ubuntu:24.04/noble-updates [all])
+Inst base-files [13ubuntu10.4] (13ubuntu10.5 Ubuntu:24.04/noble-updates [amd64])
+Inst console-setup-linux [1.226ubuntu1] (1.226ubuntu1.1 Ubuntu:24.04/noble-updates [all]) []
+Inst console-setup [1.226ubuntu1] (1.226ubuntu1.1 Ubuntu:24.04/noble-updates [all]) []
+Inst keyboard-configuration [1.226ubuntu1] (1.226ubuntu1.1 Ubuntu:24.04/noble-updates [all])
+Inst systemd-dev [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst systemd-timesyncd [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst systemd-resolved [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst libsystemd-shared [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) [systemd:amd64 ]
+Inst libsystemd0 [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) [systemd:amd64 ]
+Inst systemd-sysv [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) [systemd:amd64 ]
+Inst libnss-systemd [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) [systemd:amd64 ]
+Inst libpam-systemd [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) [systemd:amd64 ]
+Inst systemd [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst udev [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst libudev1 [255.4-1ubuntu8.17] (255.4-1ubuntu8.18 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst libapparmor1 [4.0.1really4.0.1-0ubuntu0.24.04.5] (4.0.1really4.0.1-0ubuntu0.24.04.9 Ubuntu:24.04/noble-updates [amd64])
+Inst libaudit-common [1:3.1.2-2.1build1.1] (1:3.1.2-2.1ubuntu0.1 Ubuntu:24.04/noble-updates [all])
+Inst libaudit1 [1:3.1.2-2.1build1.1] (1:3.1.2-2.1ubuntu0.1 Ubuntu:24.04/noble-updates [amd64])
+Inst liblzma5 [5.6.1+really5.4.5-1ubuntu0.3] (5.6.1+really5.4.5-1ubuntu0.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst python-apt-common [2.7.7ubuntu5.2] (2.7.7ubuntu5.3 Ubuntu:24.04/noble-updates [all])
+Inst distro-info-data [0.72-0ubuntu0.24.04.1] (2026.10.12-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst python3-apt [2.7.7ubuntu5.2] (2.7.7ubuntu5.3 Ubuntu:24.04/noble-updates [amd64])
+Inst python3-problem-report [2.28.1-0ubuntu3.8] (2.28.3-0ubuntu0.1 Ubuntu:24.04/noble-updates [all])
+Inst python3-apport [2.28.1-0ubuntu3.8] (2.28.3-0ubuntu0.1 Ubuntu:24.04/noble-updates [all])
+Inst libglib2.0-data [2.80.0-6ubuntu3.9] (2.80.0-6ubuntu3.10 Ubuntu:24.04/noble-updates [all])
+Inst libglib2.0-bin [2.80.0-6ubuntu3.9] (2.80.0-6ubuntu3.10 Ubuntu:24.04/noble-updates [amd64]) []
+Inst zlib1g [1:1.3.dfsg-3.1ubuntu2.2] (1:1.3.dfsg-3.1ubuntu2.3 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst gir1.2-glib-2.0 [2.80.0-6ubuntu3.9] (2.80.0-6ubuntu3.10 Ubuntu:24.04/noble-updates [amd64]) []
+Inst libglib2.0-0t64 [2.80.0-6ubuntu3.9] (2.80.0-6ubuntu3.10 Ubuntu:24.04/noble-updates [amd64])
+Inst apport-core-dump-handler [2.28.1-0ubuntu3.8] (2.28.3-0ubuntu0.1 Ubuntu:24.04/noble-updates [all])
+Inst apport [2.28.1-0ubuntu3.8] (2.28.3-0ubuntu0.1 Ubuntu:24.04/noble-updates [all])
+Inst dnsmasq [2.90-2ubuntu0.4] (2.91-0ubuntu0.24.04.2 Ubuntu:24.04/noble-updates [all])
+Inst haproxy [2.8.5-1ubuntu3] (2.8.30-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Inst libopeniscsiusr [2.1.9-3ubuntu5.4] (2.1.9-3ubuntu5.5 Ubuntu:24.04/noble-updates [amd64])
+Inst open-iscsi [2.1.9-3ubuntu5.4] (2.1.9-3ubuntu5.5 Ubuntu:24.04/noble-updates [amd64])
+Inst git-man [1:2.43.0-1ubuntu7.3] (1:2.43.0-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst git [1:2.43.0-1ubuntu7.3] (1:2.43.0-1ubuntu7.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst libgssapi-krb5-2 [1.20.1-6ubuntu2.7] (1.20.1-6ubuntu2.10 Ubuntu:24.04/noble-updates [amd64]) []
+Inst libkrb5-3 [1.20.1-6ubuntu2.7] (1.20.1-6ubuntu2.10 Ubuntu:24.04/noble-updates [amd64]) []
+Inst libkrb5support0 [1.20.1-6ubuntu2.7] (1.20.1-6ubuntu2.10 Ubuntu:24.04/noble-updates [amd64]) [libk5crypto3:amd64 ]
+Inst libk5crypto3 [1.20.1-6ubuntu2.7] (1.20.1-6ubuntu2.10 Ubuntu:24.04/noble-updates [amd64])
+Inst openssh-sftp-server [1:9.6p1-3ubuntu13.19] (1:9.6p1-3ubuntu13.20 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst openssh-server [1:9.6p1-3ubuntu13.19] (1:9.6p1-3ubuntu13.20 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64]) []
+Inst openssh-client [1:9.6p1-3ubuntu13.19] (1:9.6p1-3ubuntu13.20 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst libproc2-0 [2:4.0.4-4ubuntu3.2] (2:4.0.4-4ubuntu3.3 Ubuntu:24.04/noble-updates [amd64])
+Inst procps [2:4.0.4-4ubuntu3.2] (2:4.0.4-4ubuntu3.3 Ubuntu:24.04/noble-updates [amd64])
+Inst ubuntu-drivers-common [1:0.9.7.6ubuntu3.5] (1:0.9.7.6ubuntu3.7 Ubuntu:24.04/noble-updates [amd64])
+Inst iproute2 [6.1.0-1ubuntu6.2] (6.1.0-1ubuntu6.4 Ubuntu:24.04/noble-updates [amd64])
+Inst open-vm-tools [2:12.5.0-1~ubuntu0.24.04.2] (2:13.0.10-0ubuntu0.24.04.2 Ubuntu:24.04/noble-updates [amd64])
+Inst krb5-locales [1.20.1-6ubuntu2.7] (1.20.1-6ubuntu2.10 Ubuntu:24.04/noble-updates [all])
+Inst netplan-generator [1.1.2-8ubuntu1~24.04.1] (1.1.2-8ubuntu1~24.04.3 Ubuntu:24.04/noble-updates [amd64]) []
+Inst python3-netplan [1.1.2-8ubuntu1~24.04.1] (1.1.2-8ubuntu1~24.04.3 Ubuntu:24.04/noble-updates [amd64]) []
+Inst netplan.io [1.1.2-8ubuntu1~24.04.1] (1.1.2-8ubuntu1~24.04.3 Ubuntu:24.04/noble-updates [amd64]) []
+Inst libnetplan1 [1.1.2-8ubuntu1~24.04.1] (1.1.2-8ubuntu1~24.04.3 Ubuntu:24.04/noble-updates [amd64])
+Inst systemd-hwe-hwdb [255.1.6] (255.1.7 Ubuntu:24.04/noble-updates [all])
+Inst tzdata [2026c-0ubuntu0.24.04.1] (2026e-0ubuntu0.24.04.1 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst ubuntu-pro-client-l10n [37.2ubuntu~24.04.1] (38ubuntu0~24.04 Ubuntu:24.04/noble-updates [amd64]) []
+Inst ubuntu-pro-client [37.2ubuntu~24.04.1] (38ubuntu0~24.04 Ubuntu:24.04/noble-updates [amd64])
+Inst apparmor [4.0.1really4.0.1-0ubuntu0.24.04.5] (4.0.1really4.0.1-0ubuntu0.24.04.9 Ubuntu:24.04/noble-updates [amd64])
+Inst dmidecode [3.5-3ubuntu0.1] (3.5-3ubuntu0.2 Ubuntu:24.04/noble-updates [amd64])
+Inst nftables [1.0.9-1build1] (1.0.9-1ubuntu0.1 Ubuntu:24.04/noble-updates [amd64]) []
+Inst libnftables1 [1.0.9-1build1] (1.0.9-1ubuntu0.1 Ubuntu:24.04/noble-updates [amd64])
+Inst libplymouth5 [24.004.60-1ubuntu7.1] (24.004.60-1ubuntu7.2 Ubuntu:24.04/noble-updates [amd64])
+Inst lshw [02.19.git.2021.06.19.996aaad9c7-2build3] (02.19.git.2021.06.19.996aaad9c7-2ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Inst plymouth-theme-ubuntu-text [24.004.60-1ubuntu7.1] (24.004.60-1ubuntu7.2 Ubuntu:24.04/noble-updates [amd64]) []
+Inst plymouth [24.004.60-1ubuntu7.1] (24.004.60-1ubuntu7.2 Ubuntu:24.04/noble-updates [amd64])
+Inst ubuntu-release-upgrader-core [1:24.04.28] (1:24.04.29 Ubuntu:24.04/noble-updates [all]) []
+Inst python3-distupgrade [1:24.04.28] (1:24.04.29 Ubuntu:24.04/noble-updates [all])
+Inst xz-utils [5.6.1+really5.4.5-1ubuntu0.3] (5.6.1+really5.4.5-1ubuntu0.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst tmux [3.4-1ubuntu0.1] (3.4-1ubuntu0.2 Ubuntu:24.04/noble-updates [amd64])
+Inst byobu [6.11-0ubuntu1] (6.11-0ubuntu1.1 Ubuntu:24.04/noble-updates [all])
+Inst kubeadm [1.36.5-1.1] (1.36.6-1.1 isv:kubernetes:core:stable:v1.36:pkgs.k8s.io [amd64])
+Inst kubectl [1.36.5-1.1] (1.36.6-1.1 isv:kubernetes:core:stable:v1.36:pkgs.k8s.io [amd64])
+Inst kubernetes-cni [1.8.0-1.1] (1.9.1-1.1 isv:kubernetes:core:stable:v1.36:pkgs.k8s.io [amd64])
+Inst kubelet [1.36.5-1.1] (1.36.6-1.1 isv:kubernetes:core:stable:v1.36:pkgs.k8s.io [amd64])
+Inst libbrotli1 [1.1.0-2build2] (1.1.0-2ubuntu0.1 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst libjcat1 [0.2.0-2build3] (0.2.3-1~ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Inst libfwupd2 [1.9.33-0ubuntu1~24.04.1ubuntu1] (1.9.34-0ubuntu1~24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Inst libnss3 [2:3.98-1ubuntu0.2] (2:3.98-1ubuntu0.3 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])
+Inst libxmlb2 [0.3.18-1] (0.3.24-1~ubuntu0.24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Inst linux-base [4.5ubuntu9+24.04.1] (4.5ubuntu9+24.04.2 Ubuntu:24.04/noble-updates [all])
+Inst python3-jwt [2.7.0-1ubuntu0.3] (2.7.0-1ubuntu0.4 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [all])
+Inst software-properties-common [0.99.49.3] (0.99.49.4 Ubuntu:24.04/noble-updates [all]) []
+Inst python3-software-properties [0.99.49.3] (0.99.49.4 Ubuntu:24.04/noble-updates [all])
+Inst snapd [2.76+ubuntu24.04.1] (2.77.1+ubuntu24.04 Ubuntu:24.04/noble-updates [amd64])
+Inst sosreport [4.9.2-0ubuntu0~24.04.1] (4.11.2-0ubuntu0~24.04.1 Ubuntu:24.04/noble-updates [amd64])
+Inst cloud-init [25.2-0ubuntu1~24.04.1] (26.2-0ubuntu1~24.04.2 Ubuntu:24.04/noble-updates [all])
+Inst kpartx [0.9.4-5ubuntu8.1] (0.9.4-5ubuntu8.2 Ubuntu:24.04/noble-updates [amd64])
+Inst multipath-tools [0.9.4-5ubuntu8.1] (0.9.4-5ubuntu8.2 Ubuntu:24.04/noble-updates [amd64])

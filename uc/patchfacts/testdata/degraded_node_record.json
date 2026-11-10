@@ -1,0 +1,40 @@
+{
+  "collectedAt": "2026-11-08T18:52:28Z",
+  "runningKernel": "6.8.0-147-generic",
+  "installedKernels": [
+    "6.8.0-147-generic"
+  ],
+  "newestInstalledKernel": "6.8.0-147-generic",
+  "rebootRequired": true,
+  "rebootRequiredSince": null,
+  "rebootTriggerPackages": [
+    "linux-image-6.8.0-148-generic"
+  ],
+  "securityUpdateCount": null,
+  "securityUpdatePackages": null,
+  "securityUpdatesStale": true,
+  "packageMetadataAgeSeconds": null,
+  "packageMetadataSource": "",
+  "lastPackageRunAt": "2026-11-02T21:50:16Z",
+  "bootTime": "2026-11-03T10:15:29Z",
+  "automaticUpdateUnitState": "masked",
+  "heldPackages": [
+    {
+      "name": "kubeadm",
+      "version": "1.36.5-1.1"
+    },
+    {
+      "name": "kubectl",
+      "version": "1.36.5-1.1"
+    },
+    {
+      "name": "kubelet",
+      "version": "1.36.5-1.1"
+    }
+  ],
+  "fieldErrors": {
+    "packageMetadataAgeSeconds": "neither /var/lib/apt/periodic/update-success-stamp nor /var/lib/apt/lists can be read: stat /var/lib/apt/lists: file does not exist",
+    "rebootRequiredSince": "/var/run/reboot-required has no readable modification time",
+    "securityUpdateCount": "the package metadata age is unknown, so the count is not reported: a count with no age cannot be told apart from a node whose metadata never refreshes"
+  }
+}

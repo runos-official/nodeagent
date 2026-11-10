@@ -1,0 +1,6 @@
+containerd
+cri-tools
+kubeadm
+kubectl
+kubelet
+kubernetes-cni

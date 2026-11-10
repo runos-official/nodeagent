@@ -60,7 +60,7 @@ import re
 import subprocess
 import sys
 
-LEAKCHECK_VERSION = "1.2.1"
+LEAKCHECK_VERSION = "1.3.1"
 
 # ---------------------------------------------------------------------------
 # Credential shapes. Kept in step with CREDENTIAL in scripts/release.sh.
@@ -269,6 +269,23 @@ def is_ipv4_netmask(addr) -> bool:
     return inverted & (inverted + 1) == 0
 
 
+def is_apt_package_version_context(path: str, token: str, text: str) -> bool:
+    """True when apt output identifies token as a Debian package version.
+
+    1.3.1. A four-part Debian version can have the same shape as an IPv4
+    address. The exception uses apt's line grammar instead of an address range.
+    Arbitrary addresses in 0.0.0.0/8 therefore stay reportable.
+    """
+    quoted = re.escape(token)
+    patterns = [
+        rf"^\s*(?:Installed|Candidate):\s+{quoted}\s*$",
+        rf"^\s*(?:Inst|Conf)\s+.*(?:\[{quoted}\]|\({quoted}(?:\s|\)))",
+    ]
+    if os.path.basename(path) == "apt_cache_policy_packages.txt":
+        patterns.append(rf"^\s*(?:\*\*\*\s+)?{quoted}\s+\d+\s*$")
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
 def classify_ip(token: str):
     """Return the address if it must be reported, or None if it is allowed."""
     try:
@@ -300,6 +317,8 @@ def scan_line(path: str, lineno: int, text: str, patterns: list) -> list:
 
     for match in IPV4_CANDIDATE_RE.finditer(text):
         token = match.group(1)
+        if is_apt_package_version_context(path, token, text):
+            continue
         if classify_ip(token) is not None:
             findings.append(Finding(path, lineno, "ipv4", token, snippet))
 

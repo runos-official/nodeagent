@@ -329,6 +329,11 @@ func fetchScriptToTempFile(rawURL string) (string, error) {
 	return tmp.Name(), nil
 }
 
+var (
+	fetchRemoteInstructionScript = fetchScriptToTempFile
+	runRemoteInstructionScript   = runScriptFile
+)
+
 // HandleRunRemoteScript fetches a script from the configured installer/conductor
 // endpoint and runs it, returning the captured output (or a background marker).
 //
@@ -354,6 +359,10 @@ func HandleRunRemoteScript(b64ScriptData *pb.ToNodeAgent) (*pb.FromNodeAgent, er
 		roslog.E("Rejected RUN_REMOTE_SCRIPT: invalid script parameter", err)
 		return nil, err
 	}
+	// The controlled package run arrives as a remote script. The agent cannot
+	// safely infer which valid scripts change packages, so every completed
+	// remote script refreshes the patch facts.
+	defer TriggerNodePatchFactsReport()
 
 	scriptURL, err := buildRemoteScriptURL(request.Script, request.Params)
 	if err != nil {
@@ -361,7 +370,7 @@ func HandleRunRemoteScript(b64ScriptData *pb.ToNodeAgent) (*pb.FromNodeAgent, er
 		return nil, err
 	}
 
-	tmpPath, err := fetchScriptToTempFile(scriptURL)
+	tmpPath, err := fetchRemoteInstructionScript(scriptURL)
 	if err != nil {
 		roslog.E("Error fetching remote script", err)
 		return nil, err
@@ -379,7 +388,7 @@ func HandleRunRemoteScript(b64ScriptData *pb.ToNodeAgent) (*pb.FromNodeAgent, er
 		run = scriptRun{Stdout: "Script is running in the background."}
 	} else {
 		budget := scriptBudget(request.TimeoutSeconds)
-		run = runScriptFile(tmpPath, budget)
+		run = runRemoteInstructionScript(tmpPath, budget)
 		os.Remove(tmpPath)
 		if run.ExitCode != 0 {
 			roslog.E("Remote script execution failed", fmt.Errorf("exit code %d (timedOut=%v)", run.ExitCode, run.TimedOut),

@@ -84,6 +84,9 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	if err := validateUpgradeNodeK8sRequest(req); err != nil {
 		return failUpgrade(progress, "", tag, "refusing the upgrade: %v", err), nil
 	}
+	// The upgrade can change package state on success or on any later failure.
+	// Collect fresh facts after every accepted upgrade instruction.
+	defer TriggerNodePatchFactsReport()
 
 	previous := getCurrentKubeletVersion()
 	sendUpgradeLog(progress, fmt.Sprintf("Starting K8s upgrade %s → %s (isFirstCp=%t)",
@@ -226,7 +229,7 @@ func handleUpgradeNodeK8s(instruction *pb.ToNodeAgent, progress *ProgressTagger)
 	}
 
 	currentContainerd := getCurrentContainerdVersion()
-	if !strings.HasPrefix(currentContainerd, req.TargetContainerdVersion) {
+	if containerdNeedsInstall(currentContainerd, req.TargetContainerdVersion) {
 		sendUpgradeLog(progress, fmt.Sprintf("Upgrading containerd %s → %s", currentContainerd, req.TargetContainerdVersion), 1)
 		cmd := "apt-get install -y " + shellQuote("containerd="+req.TargetContainerdVersion+"-*")
 		if out, err := upgradeRunShell(cmd); err != nil {
@@ -382,6 +385,33 @@ func getCurrentKubeletVersion() string {
 		return ""
 	}
 	return strings.TrimPrefix(parts[1], "v")
+}
+
+// containerdNeedsInstall decides whether the explicit Kubernetes node upgrade
+// must install the target containerd version. installed is the full Debian
+// version dpkg reports, for example "1.7.24-0ubuntu1~24.04.1"; target is an
+// upstream version from the version matrix, for example "1.7.24".
+//
+// It compares UPSTREAM VERSIONS, not string prefixes. A prefix test was wrong in
+// two directions: a target of 1.7.2 prefix-matches an installed 1.7.24, so a
+// real upgrade was skipped, and an epoch on one side hid a version that matched.
+// It also ignores the revision on purpose: moving a held package to a newer
+// distribution revision of the version the node already runs belongs to the
+// controlled maintenance run, not to this path.
+//
+// ON A VERSION IT CANNOT READ IT INSTALLS THE TARGET. This is an EXPLICIT
+// upgrade, so the user asked for this version and must get it; an unreadable
+// dpkg read must not silently skip the install. The controlled maintenance run
+// takes the opposite direction with the same decision function, because it must
+// never move a package whose version it cannot read.
+func containerdNeedsInstall(installed, target string) bool {
+	same, err := commons.SameUpstreamVersion(installed, target)
+	if err != nil {
+		roslog.W("Cannot compare the installed containerd version with the target, installing the target",
+			err, "installed", installed, "target", target)
+		return true
+	}
+	return !same
 }
 
 func getCurrentContainerdVersion() string {

@@ -50,6 +50,30 @@ clean:
 	@rm -f $(BINARY_NAME)
 
 # ============================================================================
+# Generated protobuf
+# ============================================================================
+
+# This repository holds the GENERATED l2sec file and no .proto source: the proto
+# is hand-synced with the control plane repository, with no gate between the two.
+# proto-check regenerates from the committed file's own descriptor and refuses a
+# file protoc-gen-go would not produce, which catches a hand edit that changed
+# the Go struct tag and not the serialized descriptor, or the other way round.
+#
+# It needs the module proxy, because it fetches the protoc-gen-go plugin.
+.PHONY: proto-check
+proto-check:
+	@go run ./tools/protogen
+
+# Write the reference generated file somewhere to diff against, when adding a
+# field. It carries NO proto comments, because the compiled descriptor has no
+# SourceCodeInfo, so apply its field hunks by hand and keep the comments. The
+# tool refuses DIR values that resolve to the committed generated file.
+# Read the header of tools/protogen/main.go before using it.
+.PHONY: proto-ref
+proto-ref:
+	@go run ./tools/protogen -print $(or $(DIR),./.proto-ref)
+
+# ============================================================================
 # Leak gate (PUBLIC repo)
 # ============================================================================
 
@@ -116,6 +140,9 @@ help:
 	@echo "  make format-check Reject unformatted Go files"
 	@echo "  make version  Show the version that would be injected"
 	@echo "  make clean    Remove build artifacts"
+	@echo ""
+	@echo "  make proto-check      Refuse a generated l2sec file protoc-gen-go would not produce"
+	@echo "  make proto-ref DIR=.  Write the reference generated l2sec file, to diff when adding a field"
 	@echo ""
 	@echo "  make hooks            Install the tracked git hooks (run once per clone)"
 	@echo "  make leakcheck        Scan every tracked file for leaks (PUBLIC repo gate)"

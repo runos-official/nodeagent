@@ -31,6 +31,8 @@ type heartbeatRequest struct {
 	RolesKnown        bool   `json:"rolesKnown"`
 }
 
+const nodeAgentHeartbeatInterval = 5 * time.Second
+
 // NodeAgentHeartbeat sends a single heartbeat to Nodeward with the node's
 // current role, status and version, and returns any send/decode error.
 func NodeAgentHeartbeat() error {
@@ -132,7 +134,7 @@ func StartNodeAgentHeartbeatManager(ctx context.Context) chan struct{} {
 	done := make(chan struct{})
 
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(nodeAgentHeartbeatInterval)
 		defer ticker.Stop()
 		defer close(done)
 

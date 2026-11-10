@@ -1,6 +1,7 @@
 package install
 
 import (
+	"github.com/runos-official/nodeagent/agentstream"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/install"
 	"github.com/runos-official/nodeagent/uc/sync"
@@ -20,6 +21,7 @@ successful 'runos register'.`,
   sudo runos install k8s`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		defer agentstream.MarkNodePatchFactsAfterInstall()
 		// Sync peer so that we can join a cluster
 		banner("Syncing VPN")
 		if err := sync.ForceVpnSync(); err != nil {

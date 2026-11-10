@@ -1,6 +1,7 @@
 package install
 
 import (
+	"github.com/runos-official/nodeagent/agentstream"
 	"github.com/runos-official/nodeagent/roslog"
 	registernode "github.com/runos-official/nodeagent/uc/install"
 	"github.com/runos-official/nodeagent/uc/sync"
@@ -20,6 +21,7 @@ successful 'runos register'.`,
   sudo runos install wireguard`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		defer agentstream.MarkNodePatchFactsAfterInstall()
 		// Install Wireguard
 		banner("Installing WireGuard")
 		if err := registernode.InstallVpn(); err != nil {

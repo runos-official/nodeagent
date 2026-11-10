@@ -199,12 +199,35 @@ def main() -> int:
     # Other ratcheted address shapes.
     expect_catch("RFC1918 address", "listen-address=%s\n" % dotted(10, 0, 0, 1), dotted(10, 0, 0, 1))
     expect_catch("public address", "resolver %s\n" % dotted(8, 8, 8, 8), dotted(8, 8, 8, 8))
+    expect_catch(
+        "assignable address in zero slash eight",
+        "the node answers at %s\n" % dotted(0, 42, 17, 9),
+        dotted(0, 42, 17, 9),
+    )
+    expect_catch(
+        "assignable address followed by a number",
+        "  %s 500\n" % dotted(0, 42, 17, 9),
+        dotted(0, 42, 17, 9),
+    )
     expect_catch("address inside a CIDR", "the pod range %s/16\n" % dotted(172, 25, 0, 0), dotted(172, 25, 0, 0))
     expect_catch("global IPv6 address", "nameserver %s\n" % GLOBAL_V6, GLOBAL_V6)
     # 1.1.0 guards the netmask allowance: only 255.x, only contiguous.
     expect_catch("non-contiguous mask-shaped quad", "mask %s\n" % dotted(255, 255, 1, 0), dotted(255, 255, 1, 0))
     expect_catch("contiguous mask below /8", "base %s/2\n" % dotted(192, 0, 0, 0), dotted(192, 0, 0, 0))
-    expect_catch("wildcard mask, not a netmask", "acl %s\n" % dotted(0, 255, 255, 255), dotted(0, 255, 255, 255))
+    expect_catch(
+        "wildcard mask, not a netmask",
+        "acl %s\n" % dotted(0, 255, 255, 255),
+        dotted(0, 255, 255, 255),
+    )
+    expect_clean(
+        "installed Debian package version in captured apt policy output",
+        "  Installed: %s\n" % dotted(0, 99, 49, 3),
+    )
+    expect_clean(
+        "candidate Debian package version in captured apt simulation output",
+        "Inst package [%s] (%s Ubuntu:24.04/noble-updates [all])\n"
+        % (dotted(0, 99, 49, 3), dotted(0, 99, 49, 4)),
+    )
 
     # Credentials, which are never baselineable.
     expect_catch("AWS access key id", "aws_access_key_id = %s\n" % AWS_KEY_ID, AWS_KEY_ID)
@@ -302,6 +325,13 @@ def main() -> int:
     expect_clean("/21 netmask", "Subnet mask . . . : %s\n" % dotted(255, 255, 248, 0))
     expect_clean("/8 netmask", "netmask %s\n" % dotted(255, 0, 0, 0))
     expect_clean("/24 netmask", "netmask %s\n" % dotted(255, 255, 255, 0))
+
+    print()
+    # 1.3.1: allow a four-part Debian version only when apt's grammar identifies
+    # it as a package version. An arbitrary dotted quad stays reportable.
+    expect_clean("a Debian package version shaped like a quad", "Inst foo [%s] (%s)\n" % (dotted(0, 99, 49, 3), dotted(0, 99, 49, 4)))
+    expect_catch("an arbitrary dotted quad in 0/8", "version %s\n" % dotted(0, 1, 2, 3), dotted(0, 1, 2, 3))
+    expect_catch("a real-looking address outside 0/8", "host %s\n" % dotted(1, 99, 49, 3), dotted(1, 99, 49, 3))
 
     # Things that look numeric but are not addresses. These are the false
     # positives that would get the gate switched off.
