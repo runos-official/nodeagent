@@ -8,6 +8,7 @@ import (
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/certstore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials"
@@ -70,7 +71,7 @@ const l2secServiceConfig = `{
 // pure helper (no dialing, no globals) so this load+validate path is unit-testable
 // against on-disk fixtures.
 func loadL2SecClientTLS(certPath, keyPath, caPath, serverName string) (*tls.Config, error) {
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	cert, err := certstore.LoadKeyPair(certPath, keyPath)
 	if err != nil {
 		roslog.E("failed to load client cert", err)
 		return nil, fmt.Errorf("failed to load client certificate: %w", err)
