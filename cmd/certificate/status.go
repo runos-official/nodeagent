@@ -18,8 +18,9 @@ var statusCmd = &cobra.Command{
 	Short: "Show the node agent mTLS certificate status",
 	Long: `Show the current mTLS certificate's expiry and how many days remain.
 
-A renewal is recommended once fewer than ` + fmt.Sprintf("%d", certificate.RenewalThresholdDays) + ` days remain (the same
-threshold the agent's auto-renewal uses). Pass --json for a stable,
+A renewal is recommended once the certificate is in the last third of its
+life (the same due point the agent's auto-renewal uses; each node gets a
+fixed offset so a fleet does not renew at once). Pass --json for a stable,
 machine-readable object suitable for scripting.`,
 	Example: `  # Human-readable status
   runos certificate status
@@ -30,7 +31,8 @@ machine-readable object suitable for scripting.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out := cmd.OutOrStdout()
 
-		notAfter, err := certificate.GetCertificateExpiration()
+		timing, err := certificate.RenewalTiming(time.Now())
+		notAfter := timing.NotAfter
 		if err != nil {
 			if statusJSON {
 				enc := json.NewEncoder(out)
@@ -46,7 +48,7 @@ machine-readable object suitable for scripting.`,
 		}
 
 		daysRemaining := int(time.Until(notAfter).Hours() / 24)
-		renewRecommended := daysRemaining <= certificate.RenewalThresholdDays
+		renewRecommended := timing.Due
 
 		if statusJSON {
 			enc := json.NewEncoder(out)
