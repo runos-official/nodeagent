@@ -1,12 +1,19 @@
 package registernode
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/runos-official/nodeagent/config"
+	"github.com/runos-official/nodeagent/uc/certstore"
 	"github.com/runos-official/nodeagent/uc/csrcert"
 )
+
+// registrationLockWait is how long a registration waits for the certificate
+// renewal lock. Zero means the store default (60 s). Tests shorten it.
+var registrationLockWait time.Duration
 
 // CredPaths names the three files that hold the node's mTLS credentials.
 type CredPaths struct {
@@ -37,7 +44,16 @@ func StoreCredentials(key *csrcert.Key, resp csrcert.Response, p CredPaths) (csr
 }
 
 // WriteCredentials writes a response that csrcert.Resolve already accepted.
+//
+// It holds the certificate renewal lock around the three writes, so a
+// registration never lands between the checks and the renames of a
+// certificate adoption.
 func WriteCredentials(outcome csrcert.Outcome, key *csrcert.Key, resp csrcert.Response, p CredPaths) error {
+	release, err := certstore.AcquireRenewalLock(context.Background(), filepath.Dir(p.Cert), registrationLockWait)
+	if err != nil {
+		return fmt.Errorf("take the certificate renewal lock: %w", err)
+	}
+	defer release()
 	if err := StorePublicKey(resp.CACertPEM, p.CA); err != nil {
 		return fmt.Errorf("could not store CA certificate: %w", err)
 	}

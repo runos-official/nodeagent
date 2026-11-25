@@ -908,3 +908,28 @@ func TestManualRenewOutput(t *testing.T) {
 		}
 	})
 }
+
+// TestCancelledContextDoesNotMint: a caller whose context ended while it
+// waited for the lock gets no mint, and the lock is released.
+func TestCancelledContextDoesNotMint(t *testing.T) {
+	ca := csrtest.NewCA(t)
+	p := currentCreds(t, ca)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f := noMint(t)
+	d, _ := newDeps(p, f)
+	if _, err := renewOnce(ctx, d); !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled, got %v", err)
+	}
+	if f.callCount() != 0 {
+		t.Fatal("a cancelled caller minted")
+	}
+	if left := strayFiles(t, filepath.Dir(p.Cert)); len(left) != 0 {
+		t.Fatalf("a cancelled caller left files: %v", left)
+	}
+	release, err := certstore.AcquireRenewalLock(context.Background(), filepath.Dir(p.Cert), 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("the lock stayed held: %v", err)
+	}
+	release()
+}

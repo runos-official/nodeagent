@@ -217,6 +217,10 @@ func renewOnce(ctx context.Context, d deps) (Result, error) {
 	var once sync.Once
 	unlock := func() { once.Do(release) }
 	defer unlock()
+	// A caller that gave up while this call waited gets no mint.
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 
 	// 3. Recover.
 	recErr := s.Recover()
