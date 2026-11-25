@@ -82,6 +82,16 @@ func (k *Key) CSRDER() []byte { return k.csrDER }
 // Public is the public half of the key.
 func (k *Key) Public() *ecdsa.PublicKey { return &k.priv.PublicKey }
 
+// PKCS8PEM returns the local private key as a PKCS#8 PEM block, for the
+// certificate store. The value is secret: never log it.
+func (k *Key) PKCS8PEM() ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(k.priv)
+	if err != nil {
+		return nil, fmt.Errorf("encode key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
 // Fingerprint is a short SHA-256 prefix of the public key, safe for logs.
 func (k *Key) Fingerprint() string {
 	der, err := x509.MarshalPKIXPublicKey(k.Public())

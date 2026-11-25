@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/runos-official/nodeagent/backend"
-	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
-	"github.com/runos-official/nodeagent/uc/registernode"
+	"github.com/runos-official/nodeagent/uc/certstore"
 )
 
 // RenewalGracePeriod is how long the previously issued certificate keeps working
@@ -22,7 +21,9 @@ import (
 const RenewalGracePeriod = 5 * time.Minute
 
 // RenewResult is the stable, machine-readable shape emitted by `runos
-// certificate renew --json` on success. NotAfter is the new certificate's expiry
+// certificate renew --json` on success. Status is "renewed" or
+// "already_renewed" (another process renewed first; no new request was
+// sent). NotAfter is the live certificate's expiry
 // (RFC3339); RestartRequired is always true because the running agent must be
 // restarted to load the new certificate.
 type RenewResult struct {
@@ -35,7 +36,7 @@ type RenewResult struct {
 // configured public-key path rather than hardcoded, so a non-default mtls.crt
 // location is reported correctly.
 func certDir() string {
-	return filepath.Dir(config.GetPublicKeyPath())
+	return filepath.Dir(configuredPaths().Cert)
 }
 
 // RenewCertificate renews the mTLS certificate for the node agent. It returns an
@@ -44,13 +45,17 @@ func certDir() string {
 // human progress lines are suppressed and a single RenewResult / error object is
 // written to stdout.
 func RenewCertificate(jsonOut bool) error {
+	return renewCertificate(jsonOut, defaultDeps("CertificateRenewal", "Certificate renewed successfully"), os.Stdout)
+}
+
+func renewCertificate(jsonOut bool, d deps, out io.Writer) error {
 	roslog.I("Starting certificate renewal")
 
 	// progress prints a human-readable progress line, suppressed in JSON mode so
 	// stdout carries only the final JSON object.
 	progress := func(format string, args ...any) {
 		if !jsonOut {
-			fmt.Printf(format, args...)
+			fmt.Fprintf(out, format, args...)
 		}
 	}
 
@@ -60,7 +65,7 @@ func RenewCertificate(jsonOut bool) error {
 	fail := func(step, cause, remedy string) error {
 		roslog.E(step, errors.New(cause))
 		if jsonOut {
-			emitJSONError(cause)
+			emitJSONError(out, cause)
 			return roslog.AlreadyReported(fmt.Errorf("%s: %s", step, cause))
 		}
 		return roslog.Fail(step, cause, remedy)
@@ -70,93 +75,65 @@ func RenewCertificate(jsonOut bool) error {
 	progress("║   RunOS Certificate Renewal                   ║\n")
 	progress("╚═══════════════════════════════════════════════╝\n\n")
 
-	// Step 1: Backup existing certificates
-	progress("→ Backing up existing certificates...\n")
-	backupDir, err := backupCertificates()
+	d.OnStep = func(step string) {
+		switch step {
+		case stepLockWait:
+			progress("→ Waiting for another certificate renewal to end...\n\n")
+		case stepRequest:
+			progress("→ Requesting new certificate from Nodeward...\n")
+		case stepAdopt:
+			progress("  ✓ New certificate received\n\n")
+			progress("→ Checking and adopting the new certificate...\n")
+		}
+	}
+	// The serial of the certificate that this command read at its start.
+	d.ExpectedSerial, _ = certstore.Open(d.Paths).HeldSerial()
+
+	res, err := renewOnce(context.Background(), d)
 	if err != nil {
-		return fail("Renew certificate: back up existing certificates", err.Error(),
-			fmt.Sprintf("ensure %s is writable and you are running as root, then re-run", certDir()))
-	}
-	progress("  ✓ Certificates backed up to: %s\n\n", backupDir)
-
-	// Step 2: Connect to Nodeward and request new certificate
-	progress("→ Connecting to Nodeward with current certificate...\n")
-	c, _, cancel, conn, err := backend.NodewardL2Sec()
-	if err != nil {
-		cleanupBackup(backupDir)
-		return fail("Renew certificate: connect to Nodeward", err.Error(),
-			"check connectivity to Nodeward; if this node is not registered yet, run `runos register` first")
-	}
-	defer cancel()
-	defer conn.Close()
-
-	// Use a bounded context for the renewal RPC (mirrors autorenew.go).
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelCtx()
-
-	progress("  ✓ Connected\n\n")
-
-	// Step 3: Call RegenerateCertificate RPC
-	progress("→ Requesting new certificate from Nodeward...\n")
-	roslog.I("Calling RegenerateCertificate RPC")
-
-	paths := registernode.DefaultCredPaths()
-	response, err := requestCertificate(ctx, c, paths, time.Now)
-	if err != nil {
-		cleanupBackup(backupDir)
-		return fail("Renew certificate: request new certificate from Nodeward", err.Error(),
-			"retry shortly; if it persists, check Nodeward availability and this node's status in the RunOS console")
+		var dialErr *dialError
+		switch {
+		case errors.Is(err, certstore.ErrRenewalInProgress):
+			return fail("Renew certificate: take the renewal lock", certstore.ErrRenewalInProgress.Error(),
+				"wait for the other renewal to end, then run the command again")
+		case errors.As(err, &dialErr):
+			return fail("Renew certificate: connect to Nodeward", err.Error(),
+				"check connectivity to Nodeward; if this node is not registered yet, run `runos register` first")
+		case errors.Is(err, certstore.ErrChildRejected):
+			return fail("Renew certificate: check the new certificate",
+				fmt.Sprintf("the new certificate failed the local check: %s", certstore.RejectReason(err)),
+				"the current certificate is unchanged; run the command again later, and if it fails again check this node's status in the RunOS console")
+		case isStoreError(err):
+			return fail("Renew certificate: adopt the new certificate", err.Error(),
+				fmt.Sprintf("ensure %s is writable and you are running as root, then run the command again", certDir()))
+		default:
+			return fail("Renew certificate: request new certificate from Nodeward", err.Error(),
+				"retry shortly; if it persists, check Nodeward availability and this node's status in the RunOS console")
+		}
 	}
 
-	progress("  ✓ New certificate received\n\n")
-	roslog.I("Certificate regenerated successfully")
-
-	// Step 4: Write new certificates to disk
-	progress("→ Writing new certificates to disk...\n")
-	if err := writeCertificates(response, paths); err != nil {
-		remedy := restoreOrAdvise(progress, backupDir)
-		return fail("Renew certificate: write new certificates to disk", err.Error(), remedy)
+	if res.Status == StatusAlreadyRenewed {
+		progress("  ✓ The certificate was already renewed; no new request was needed\n\n")
+	} else {
+		progress("  ✓ New certificate adopted\n\n")
 	}
-	progress("  ✓ New certificates written\n\n")
-
-	// Step 5: Test new certificates by establishing connection and adding a log
-	progress("→ Testing new certificates...\n")
-	if err := testNewCertificates(); err != nil {
-		remedy := restoreOrAdvise(progress, backupDir)
-		return fail("Renew certificate: validate new certificates", err.Error(), remedy)
+	if res.NodeLogFailed {
+		progress("  ! Could not record the renewal in the node log; the new certificate stays\n\n")
 	}
-	progress("  ✓ New certificates validated successfully\n\n")
-
-	// Step 6: Cleanup backup files
-	cleanupBackup(backupDir)
-
-	roslog.I("Certificate renewal completed successfully")
-
-	// Read back the new expiry for the success summary / JSON.
-	notAfter, expErr := GetCertificateExpiration()
-	if expErr != nil {
-		// Non-fatal: renewal succeeded, we just cannot show the expiry.
-		roslog.W("Renewed certificate written but expiry could not be read back", expErr)
-	}
+	roslog.I("Certificate renewal completed", "status", res.Status)
 
 	if jsonOut {
-		notAfterStr := ""
-		if expErr == nil {
-			notAfterStr = notAfter.Format(time.RFC3339)
-		}
-		return emitJSON(RenewResult{
-			Status:          "renewed",
-			NotAfter:        notAfterStr,
+		return emitJSON(out, RenewResult{
+			Status:          res.Status,
+			NotAfter:        res.NotAfter.Format(time.RFC3339),
 			RestartRequired: true,
 		})
 	}
 
-	// Step 7: Success message (human mode)
+	// Success message (human mode)
 	progress("═══════════════════════════════════════════════\n\n")
 	progress("✓ Certificate Renewal Successful!\n\n")
-	if expErr == nil {
-		progress("New certificate valid until: %s\n", notAfter.Format(time.RFC3339))
-	}
+	progress("New certificate valid until: %s\n", res.NotAfter.Format(time.RFC3339))
 	progress("New certificates have been written to %s\n\n", certDir())
 	progress("Action Required:\n")
 	progress("  Please restart the node agent service to load the new certificates:\n\n")
@@ -167,17 +144,11 @@ func RenewCertificate(jsonOut bool) error {
 	return nil
 }
 
-// restoreOrAdvise attempts to restore the backup after a failed write/test and
-// returns a remedy string describing the resulting state for the failure report.
-func restoreOrAdvise(progress func(string, ...any), backupDir string) string {
-	progress("→ Restoring backup certificates...\n")
-	if restoreErr := restoreCertificates(backupDir); restoreErr != nil {
-		progress("  ✗ Failed to restore backup: %v\n", restoreErr)
-		progress("  Please manually restore certificates from: %s\n\n", backupDir)
-		return fmt.Sprintf("automatic restore failed; manually restore certificates from %s, then re-run", backupDir)
-	}
-	progress("  ✓ Backup certificates restored\n\n")
-	return "previous certificates were restored automatically; re-run once the cause is resolved"
+// isStoreError reports an error of the certificate store (prepare,
+// recovery or adoption), as opposed to a refused or failed request.
+func isStoreError(err error) bool {
+	var se *storeError
+	return errors.As(err, &se)
 }
 
 // formatGrace renders a renewal grace duration as a short human string (e.g.
@@ -191,8 +162,8 @@ func formatGrace(d time.Duration) string {
 }
 
 // emitJSON writes a RenewResult to stdout as indented JSON.
-func emitJSON(r RenewResult) error {
-	enc := json.NewEncoder(os.Stdout)
+func emitJSON(out io.Writer, r RenewResult) error {
+	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(r); err != nil {
 		return fmt.Errorf("encoding renew result JSON: %w", err)
@@ -201,84 +172,11 @@ func emitJSON(r RenewResult) error {
 }
 
 // emitJSONError writes a stable error object to stdout in JSON mode.
-func emitJSONError(message string) {
-	enc := json.NewEncoder(os.Stdout)
+func emitJSONError(out io.Writer, message string) {
+	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(struct {
 		Status string `json:"status"`
 		Error  string `json:"error"`
 	}{Status: "error", Error: message})
-}
-
-// backupCertificates creates a timestamped backup of existing certificates
-func backupCertificates() (string, error) {
-	timestamp := time.Now().Format("20060102-150405")
-	backupDir := filepath.Join(certDir(), "backup", timestamp)
-
-	// Create backup directory
-	if err := os.MkdirAll(backupDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create backup directory: %w", err)
-	}
-
-	// Backup files
-	files := map[string]string{
-		config.GetPublicKeyPath():  filepath.Join(backupDir, "mtls.crt"),
-		config.GetPrivateKeyPath(): filepath.Join(backupDir, "mtls.key"),
-		config.GetCACertPath():     filepath.Join(backupDir, "ca.crt"),
-	}
-
-	for src, dst := range files {
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return backupDir, fmt.Errorf("failed to read %s: %w", src, err)
-		}
-		if err := os.WriteFile(dst, data, 0600); err != nil {
-			return backupDir, fmt.Errorf("failed to write backup %s: %w", dst, err)
-		}
-	}
-
-	roslog.I("Certificates backed up", "backup_dir", backupDir)
-	return backupDir, nil
-}
-
-// testNewCertificates tests the new certificates by establishing a connection and adding a log
-func testNewCertificates() error {
-	// Test by adding a log entry (this will establish L2SEC connection with new certificates)
-	if err := backend.AddNodelog(3, "CertificateRenewal", "Certificate renewed successfully"); err != nil {
-		return fmt.Errorf("failed to add nodelog with new certificate: %w", err)
-	}
-
-	roslog.I("New certificate test successful")
-	return nil
-}
-
-// restoreCertificates restores certificates from backup
-func restoreCertificates(backupDir string) error {
-	files := map[string]string{
-		filepath.Join(backupDir, "mtls.crt"): config.GetPublicKeyPath(),
-		filepath.Join(backupDir, "mtls.key"): config.GetPrivateKeyPath(),
-		filepath.Join(backupDir, "ca.crt"):   config.GetCACertPath(),
-	}
-
-	for src, dst := range files {
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return fmt.Errorf("failed to read backup %s: %w", src, err)
-		}
-		if err := os.WriteFile(dst, data, 0600); err != nil {
-			return fmt.Errorf("failed to restore %s: %w", dst, err)
-		}
-	}
-
-	roslog.I("Certificates restored from backup", "backup_dir", backupDir)
-	return nil
-}
-
-// cleanupBackup removes the backup directory
-func cleanupBackup(backupDir string) {
-	if err := os.RemoveAll(backupDir); err != nil {
-		roslog.W("Failed to cleanup backup directory", err)
-	} else {
-		roslog.I("Backup directory cleaned up", "backup_dir", backupDir)
-	}
 }

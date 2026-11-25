@@ -16,14 +16,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/certstore"
 	"github.com/runos-official/nodeagent/uc/csrcert"
 	"github.com/runos-official/nodeagent/uc/csrcert/csrtest"
-	"github.com/runos-official/nodeagent/uc/registernode"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,21 +35,30 @@ import (
 // fakeL2 answers RegenerateCertificate; every other method panics.
 type fakeL2 struct {
 	l2sec.NodewardClient
+	mu      sync.Mutex
 	calls   []*l2sec.RegenerateCertificateRequest
 	respond func(*l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error)
 }
 
 func (f *fakeL2) RegenerateCertificate(_ context.Context, in *l2sec.RegenerateCertificateRequest, _ ...grpc.CallOption) (*l2sec.RegenerateCertificateResponse, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, in)
+	f.mu.Unlock()
 	return f.respond(in)
+}
+
+func (f *fakeL2) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
 }
 
 // currentCreds writes today's on-disk credentials: an RSA PKCS#1 key, as an
 // old nodeward issued them.
-func currentCreds(t *testing.T, ca *csrtest.CA) registernode.CredPaths {
+func currentCreds(t *testing.T, ca *csrtest.CA) certstore.Paths {
 	t.Helper()
 	dir := t.TempDir()
-	p := registernode.CredPaths{
+	p := certstore.Paths{
 		Cert: filepath.Join(dir, "mtls.crt"),
 		Key:  filepath.Join(dir, "mtls.key"),
 		CA:   filepath.Join(dir, "ca.crt"),
@@ -68,7 +78,7 @@ func mustWrite(t *testing.T, path, data string, mode os.FileMode) {
 }
 
 // verifyProof checks a proof the way nodeward does (contract section 5).
-func verifyProof(t *testing.T, p registernode.CredPaths, in *l2sec.RegenerateCertificateRequest) error {
+func verifyProof(t *testing.T, p certstore.Paths, in *l2sec.RegenerateCertificateRequest) error {
 	t.Helper()
 	pair, err := tls.LoadX509KeyPair(p.Cert, p.Key)
 	if err != nil {
@@ -110,7 +120,7 @@ func verifyProof(t *testing.T, p registernode.CredPaths, in *l2sec.RegenerateCer
 }
 
 // csrNodeward signs CSRs after checking the proof, like a new nodeward.
-func csrNodeward(t *testing.T, ca *csrtest.CA, p registernode.CredPaths) func(*l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
+func csrNodeward(t *testing.T, ca *csrtest.CA, p certstore.Paths) func(*l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
 	return func(in *l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
 		if in.CsrPem == "" {
 			t.Fatal("renewal sent no CSR")
@@ -126,14 +136,15 @@ func csrNodeward(t *testing.T, ca *csrtest.CA, p registernode.CredPaths) func(*l
 	}
 }
 
-func renewOnce(t *testing.T, c l2sec.NodewardClient, p registernode.CredPaths) (*issued, error) {
+// renewVia runs the shared renewal function against the fake Nodeward c.
+func renewVia(t *testing.T, c mintClient, p certstore.Paths) (Result, error) {
 	t.Helper()
-	got, err := requestCertificate(context.Background(), c, p, time.Now)
-	if err != nil {
-		return nil, err
-	}
-	return got, writeCertificates(got, p)
+	d, _ := newDeps(p, c)
+	return renewOnce(context.Background(), d)
 }
+
+// fixedTimeout is the per-call timeout of a direct requestCertificate call.
+func fixedTimeout() time.Duration { return mintCallTimeout }
 
 func TestRenewSendsCSRAndStoresOwnKey(t *testing.T) {
 	ca := csrtest.NewCA(t)
@@ -141,12 +152,12 @@ func TestRenewSendsCSRAndStoresOwnKey(t *testing.T) {
 	f := &fakeL2{respond: csrNodeward(t, ca, p)}
 
 	// First renewal: the proof is signed with today's RSA key.
-	got, err := renewOnce(t, f, p)
+	got, err := renewVia(t, f, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.outcome != csrcert.OutcomeCertificate {
-		t.Fatalf("outcome = %v", got.outcome)
+	if got.Status != StatusRenewed {
+		t.Fatalf("status = %v", got.Status)
 	}
 	pair, err := tls.LoadX509KeyPair(p.Cert, p.Key)
 	if err != nil {
@@ -160,7 +171,7 @@ func TestRenewSendsCSRAndStoresOwnKey(t *testing.T) {
 	}
 
 	// Second renewal: the proof is signed with the ECDSA key just stored.
-	if _, err := renewOnce(t, f, p); err != nil {
+	if _, err := renewVia(t, f, p); err != nil {
 		t.Fatalf("renewal from an ECDSA leaf: %v", err)
 	}
 	if len(f.calls) != 2 {
@@ -175,15 +186,14 @@ func TestRenewFallsBackToLegacyResponse(t *testing.T) {
 	f := &fakeL2{respond: func(*l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
 		return &l2sec.RegenerateCertificateResponse{PrivateKey: keyPEM, PublicKey: certPEM, CaCert: ca.PEM}, nil
 	}}
-	got, err := renewOnce(t, f, p)
-	if err != nil {
+	if _, err := renewVia(t, f, p); err != nil {
 		t.Fatal(err)
-	}
-	if got.outcome != csrcert.OutcomeLegacy {
-		t.Fatalf("outcome = %v", got.outcome)
 	}
 	if data, _ := os.ReadFile(p.Cert); string(data) != certPEM {
 		t.Fatal("legacy certificate not stored")
+	}
+	if data, _ := os.ReadFile(p.Key); string(data) != keyPEM {
+		t.Fatal("legacy key not stored")
 	}
 	if _, err := tls.LoadX509KeyPair(p.Cert, p.Key); err != nil {
 		t.Fatal(err)
@@ -197,14 +207,17 @@ func TestRenewErrorNeverFallsBack(t *testing.T) {
 	f := &fakeL2{respond: func(*l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
 		return nil, status.Error(codes.FailedPrecondition, "this agent must renew with a certificate signing request")
 	}}
-	if _, err := requestCertificate(context.Background(), f, p, time.Now); err == nil {
-		t.Fatal("expected an error")
+	if _, err := renewVia(t, f, p); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("want the refusal unchanged, got %v", err)
 	}
 	if len(f.calls) != 1 || f.calls[0].CsrPem == "" {
 		t.Fatalf("want exactly one CSR call, got %d", len(f.calls))
 	}
 	if after, _ := os.ReadFile(p.Key); string(after) != string(before) {
 		t.Fatal("key changed after a refused renewal")
+	}
+	if left := strayFiles(t, filepath.Dir(p.Cert)); len(left) != 0 {
+		t.Fatalf("a refused renewal left files: %v", left)
 	}
 }
 
@@ -215,7 +228,7 @@ func TestRenewRefusesUnusableResponse(t *testing.T) {
 	f := &fakeL2{respond: func(*l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
 		return &l2sec.RegenerateCertificateResponse{CertificatePem: foreignLeaf, CaCert: ca.PEM}, nil
 	}}
-	_, err := requestCertificate(context.Background(), f, p, time.Now)
+	_, err := requestCertificate(context.Background(), f, p, time.Now, fixedTimeout)
 	if !errors.Is(err, csrcert.ErrUnusableResponse) {
 		t.Fatalf("want ErrUnusableResponse, got %v", err)
 	}
@@ -241,7 +254,7 @@ func TestRenewRetriesOnceOnClockSkew(t *testing.T) {
 				}
 				return sign(in)
 			}
-			if _, err := renewOnce(t, f, p); err != nil {
+			if _, err := renewVia(t, f, p); err != nil {
 				t.Fatal(err)
 			}
 			if len(f.calls) != 2 {
@@ -300,6 +313,9 @@ func TestRequestFieldsSurviveOldProtoRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRenewLogsNoKeyMaterial runs renewals through the shared renewal
+// function (the CSR path with a lost answer and its retry, then the legacy
+// path) and checks the logs, the journal and every file the store left.
 func TestRenewLogsNoKeyMaterial(t *testing.T) {
 	var buf bytes.Buffer
 	old := roslog.L
@@ -308,24 +324,59 @@ func TestRenewLogsNoKeyMaterial(t *testing.T) {
 
 	ca := csrtest.NewCA(t)
 	p := currentCreds(t, ca)
-	f := &fakeL2{respond: csrNodeward(t, ca, p)}
-	if _, err := renewOnce(t, f, p); err != nil {
+	sign := csrNodeward(t, ca, p)
+	f := &fakeL2{}
+	f.respond = func(in *l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
+		if f.callCount() == 1 {
+			if _, err := sign(in); err != nil {
+				return nil, err
+			}
+			return nil, status.Error(codes.Unavailable, "connection reset")
+		}
+		return sign(in)
+	}
+	if _, err := renewVia(t, f, p); err != nil {
 		t.Fatal(err)
 	}
 	keyPEM, certPEM := ca.LegacyPair(t)
 	f.respond = func(*l2sec.RegenerateCertificateRequest) (*l2sec.RegenerateCertificateResponse, error) {
 		return &l2sec.RegenerateCertificateResponse{PrivateKey: keyPEM, PublicKey: certPEM, CaCert: ca.PEM}, nil
 	}
-	if _, err := renewOnce(t, f, p); err != nil {
+	if _, err := renewVia(t, f, p); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
 	if out == "" {
 		t.Fatal("expected log output")
 	}
-	for _, bad := range []string{"PRIVATE KEY", "CERTIFICATE REQUEST", f.calls[0].CsrPem} {
-		if strings.Contains(out, bad) {
-			t.Fatalf("log contains %q", bad)
+	if !strings.Contains(out, "asking again at once with a fresh key") {
+		t.Fatal("the lost-answer retry did not run")
+	}
+	bad := []string{"PRIVATE KEY", "CERTIFICATE REQUEST"}
+	for _, c := range f.calls {
+		bad = append(bad, c.CsrPem)
+	}
+	for _, b := range bad {
+		if strings.Contains(out, b) {
+			t.Fatalf("log contains %q", b)
+		}
+	}
+	// Every file of the store except the live key holds no key material.
+	dir := filepath.Dir(p.Cert)
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if filepath.Join(dir, e.Name()) == p.Key {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "PRIVATE KEY") {
+			t.Fatalf("%s holds key material", e.Name())
 		}
 	}
 }
