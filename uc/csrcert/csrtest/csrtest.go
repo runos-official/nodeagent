@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -49,21 +50,67 @@ func NewCA(t testing.TB) *CA {
 	return &CA{Key: key, Cert: c, PEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
 }
 
+// Nodeward agent leaf extensions (Nodeward uc/cert/version.go). Each
+// extension value is one raw byte, not DER.
+var (
+	VersionOID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 1}
+	TypeOID    = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 2}
+)
+
+// LeafOptions shapes a leaf like a Nodeward v2 agent leaf. The zero value
+// gives the plain leaf of Leaf.
+type LeafOptions struct {
+	// DNSNames are the account DNS names that a v2 leaf carries.
+	DNSNames []string
+	// Version is the value of the version extension; 0 omits the extension.
+	Version byte
+	// Type is the value of the type extension; 0 omits the extension.
+	Type byte
+	// NoClientAuth drops the ClientAuth extended key usage.
+	NoClientAuth bool
+	// NotBefore and NotAfter override the validity when not zero.
+	NotBefore, NotAfter time.Time
+}
+
 // Leaf signs a leaf shaped like nodeward's for pub.
 func (ca *CA) Leaf(t testing.TB, pub crypto.PublicKey) string {
+	t.Helper()
+	return ca.LeafWith(t, pub, LeafOptions{})
+}
+
+// LeafWith signs a leaf for pub with the shape that opts gives.
+func (ca *CA) LeafWith(t testing.TB, pub crypto.PublicKey, opts LeafOptions) string {
 	t.Helper()
 	notBefore := time.Now().Add(-time.Minute)
 	if ca.ServerNow != nil {
 		notBefore = ca.ServerNow()
 	}
+	if !opts.NotBefore.IsZero() {
+		notBefore = opts.NotBefore
+	}
+	notAfter := notBefore.Add(24 * time.Hour)
+	if !opts.NotAfter.IsZero() {
+		notAfter = opts.NotAfter
+	}
+	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	if opts.NoClientAuth {
+		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
 		Subject:               pkix.Name{CommonName: "RunOS L2Sec"},
 		NotBefore:             notBefore,
-		NotAfter:              notBefore.Add(24 * time.Hour),
+		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageKeyAgreement,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:           eku,
 		BasicConstraintsValid: true,
+		DNSNames:              opts.DNSNames,
+	}
+	if opts.Version != 0 {
+		tmpl.ExtraExtensions = append(tmpl.ExtraExtensions, pkix.Extension{Id: VersionOID, Value: []byte{opts.Version}})
+	}
+	if opts.Type != 0 {
+		tmpl.ExtraExtensions = append(tmpl.ExtraExtensions, pkix.Extension{Id: TypeOID, Value: []byte{opts.Type}})
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, pub, ca.Key)
 	if err != nil {
