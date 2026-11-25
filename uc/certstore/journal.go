@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"time"
 )
 
@@ -58,7 +57,7 @@ const journalMode fs.FileMode = 0o644
 // readJournal reads the journal. ok is false when the file does not exist.
 // A file that does not parse, or names an unknown state, is an error.
 func readJournal(path string) (rec Record, ok bool, err error) {
-	b, err := os.ReadFile(path)
+	b, err := readFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Record{}, false, nil
 	}
@@ -66,12 +65,12 @@ func readJournal(path string) (rec Record, ok bool, err error) {
 		return Record{}, false, fmt.Errorf("read journal %s: %w", path, err)
 	}
 	if err := json.Unmarshal(b, &rec); err != nil {
-		return Record{}, false, fmt.Errorf("parse journal %s: %w", path, err)
+		return Record{}, false, fmt.Errorf("%w: parse journal %s: %v", ErrStoreDamaged, path, err)
 	}
 	switch rec.State {
 	case StatePrepared, StateCommitting, StateAdopted:
 	default:
-		return Record{}, false, fmt.Errorf("journal %s has unknown state %q", path, rec.State)
+		return Record{}, false, fmt.Errorf("%w: journal %s has unknown state %q", ErrStoreDamaged, path, rec.State)
 	}
 	return rec, true, nil
 }

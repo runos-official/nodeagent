@@ -78,7 +78,7 @@ func digest(b []byte) string {
 // fileDigest returns the digest of the file at path, or "" when the file
 // does not exist.
 func fileDigest(path string) (string, error) {
-	b, err := os.ReadFile(path)
+	b, err := readFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
@@ -105,3 +105,6 @@ func removeIfPresent(path string) error {
 
 // dirOf is filepath.Dir, named for reading.
 func dirOf(path string) string { return filepath.Dir(path) }
+
+// readFile reads a whole file. Tests replace it to inject read errors.
+var readFile = os.ReadFile

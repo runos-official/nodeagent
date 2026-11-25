@@ -2,7 +2,6 @@ package certstore
 
 import (
 	"crypto/tls"
-	"os"
 	"strings"
 	"time"
 )
@@ -25,11 +24,11 @@ func LoadKeyPair(certPath, keyPath string) (tls.Certificate, error) {
 		if loadReadHook != nil {
 			loadReadHook()
 		}
-		certPEM, err := os.ReadFile(certPath)
+		certPEM, err := readFile(certPath)
 		if err != nil {
 			return tls.Certificate{}, err
 		}
-		keyPEM, err := os.ReadFile(keyPath)
+		keyPEM, err := readFile(keyPath)
 		if err != nil {
 			return tls.Certificate{}, err
 		}

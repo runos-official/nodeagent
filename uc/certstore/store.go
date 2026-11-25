@@ -190,7 +190,7 @@ func (s *Store) syncDirs() error {
 func (s *Store) readFiles(suffix string) (Material, error) {
 	var m Material
 	for _, f := range s.files() {
-		b, err := os.ReadFile(f.live + suffix)
+		b, err := readFile(f.live + suffix)
 		if err != nil {
 			return Material{}, err
 		}
@@ -255,7 +255,7 @@ func (s *Store) Adopted() (rec Record, ok bool, err error) {
 // HeldSerial returns the serial of the live certificate as lower-case
 // hexadecimal text.
 func (s *Store) HeldSerial() (string, error) {
-	b, err := os.ReadFile(s.paths.Cert)
+	b, err := readFile(s.paths.Cert)
 	if err != nil {
 		return "", err
 	}
@@ -273,7 +273,7 @@ func (s *Store) HeldSerial() (string, error) {
 func (s *Store) Prepare() error {
 	rec, ok, err := readJournal(s.journalPath())
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreDamaged, err)
+		return err
 	}
 	if ok && rec.State == StateCommitting {
 		return ErrRecoverFirst
@@ -338,7 +338,7 @@ func (s *Store) Prepare() error {
 func (s *Store) Adopt(m Material) error {
 	rec, ok, err := readJournal(s.journalPath())
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreDamaged, err)
+		return err
 	}
 	if !ok || rec.State != StatePrepared {
 		return ErrNotPrepared
@@ -492,7 +492,7 @@ func (s *Store) Recover() error {
 	rec, ok, err := readJournal(s.journalPath())
 	if err != nil {
 		roslog.E("Certificate store journal is unreadable; changing nothing", err)
-		return fmt.Errorf("%w: %v", ErrStoreDamaged, err)
+		return err
 	}
 	stray := s.strayPaths()
 
@@ -529,7 +529,12 @@ func (s *Store) Recover() error {
 	}
 
 	if rec.State == StatePrepared {
-		committing, ok := s.validStage(rec)
+		committing, ok, err := s.validStage(rec)
+		if err != nil {
+			// A read error is not a missing or bad child: change nothing.
+			roslog.E("Cannot read the certificate store; changing nothing", err, "state", rec.State)
+			return err
+		}
 		if !ok {
 			// Rule 5: no usable child; the parent stays.
 			if err := s.removeAll(append(s.prevPaths(), s.nextPaths()...)); err != nil {
@@ -554,7 +559,12 @@ func (s *Store) Recover() error {
 	}
 
 	// Rules 6 and 7: state committing.
-	if s.stageIntact(rec, liveD) {
+	intact, err := s.stageIntact(rec, liveD)
+	if err != nil {
+		roslog.E("Cannot read the certificate store; changing nothing", err, "state", rec.State)
+		return err
+	}
+	if intact {
 		if err := s.rollForward(rec, "recover-"); err != nil {
 			return err
 		}
@@ -580,23 +590,30 @@ func (s *Store) superseded(rec Record, liveD Digests) bool {
 }
 
 // validStage returns the committing record when three staged files exist
-// and pass the local checks against the live parent.
-func (s *Store) validStage(rec Record) (Record, bool) {
+// and pass the local checks against the live parent. ok is false only for a
+// missing staged file or a failed check. Any other read error returns err,
+// and the caller must change nothing: the child may be valid.
+func (s *Store) validStage(rec Record) (_ Record, ok bool, err error) {
 	staged, err := s.readFiles(nextSuffix)
-	if err != nil {
-		return Record{}, false
+	if errors.Is(err, fs.ErrNotExist) {
+		return Record{}, false, nil
 	}
-	parentPEM, err := os.ReadFile(s.paths.Cert)
 	if err != nil {
-		return Record{}, false
+		return Record{}, false, fmt.Errorf("read staged certificate: %w", err)
+	}
+	parentPEM, err := readFile(s.paths.Cert)
+	if err != nil {
+		return Record{}, false, fmt.Errorf("read held certificate: %w", err)
 	}
 	parent, err := parseOneCert(parentPEM)
 	if err != nil {
-		return Record{}, false
+		// The live file has the journal digest of a parent that parsed at
+		// Prepare, so this is damage, not a reason to discard the child.
+		return Record{}, false, fmt.Errorf("%w: parse held certificate: %v", ErrStoreDamaged, err)
 	}
 	child, err := checkChild(staged, parent, s.now())
 	if err != nil {
-		return Record{}, false
+		return Record{}, false, nil
 	}
 	return Record{
 		State:         StateCommitting,
@@ -607,41 +624,49 @@ func (s *Store) validStage(rec Record) (Record, bool) {
 		ChildSerial:   serialText(child),
 		ChildNotAfter: child.NotAfter.UTC(),
 		UpdatedAt:     s.now().UTC(),
-	}, true
+	}, true, nil
 }
 
 // stageIntact reports whether every file of the child is either staged with
 // its journal digest or already live with that digest.
-func (s *Store) stageIntact(rec Record, liveD Digests) bool {
+func (s *Store) stageIntact(rec Record, liveD Digests) (bool, error) {
 	return s.intact(rec.Next, nextSuffix, liveD)
 }
 
-func (s *Store) intact(want Digests, suffix string, liveD Digests) bool {
+// intact reports whether every file is either present with suffix and the
+// digest of want, or live with that digest. false means a missing file or a
+// wrong digest. A read error returns err, never false.
+func (s *Store) intact(want Digests, suffix string, liveD Digests) (bool, error) {
 	for _, f := range s.files() {
 		w := want.get(f.name)
 		if w == "" {
-			return false
+			return false, nil
 		}
-		p := f.live + suffix
-		if exists(p) {
-			d, err := fileDigest(p)
-			if err != nil || d != w {
-				return false
-			}
-			continue
+		d, err := fileDigest(f.live + suffix)
+		if err != nil {
+			return false, fmt.Errorf("read %s: %w", f.live+suffix, err)
 		}
-		if liveD.get(f.name) != w {
-			return false
+		if d == "" {
+			// No file with suffix: the live file must carry the digest.
+			d = liveD.get(f.name)
+		}
+		if d != w {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 // restoreParent is rule 7: a staged file is damaged after the commit.
 // It restores the full parent from the .prev files, or changes nothing and
 // returns ErrStoreDamaged when the .prev files are damaged too.
 func (s *Store) restoreParent(rec Record, liveD Digests) error {
-	if !s.intact(rec.Prev, prevSuffix, liveD) {
+	prevOK, err := s.intact(rec.Prev, prevSuffix, liveD)
+	if err != nil {
+		roslog.E("Cannot read the certificate store; changing nothing", err, "state", rec.State)
+		return err
+	}
+	if !prevOK {
 		roslog.E("Certificate store is damaged: the staged and the previous credentials both fail their digests", nil,
 			"parent_serial", rec.ParentSerial, "child_serial", rec.ChildSerial)
 		return ErrStoreDamaged
@@ -674,7 +699,7 @@ func (s *Store) restoreParent(rec Record, liveD Digests) error {
 // sequence number.
 func (s *Store) writeAtRest(seq uint64) error {
 	rec := Record{State: StateAdopted, Sequence: seq, UpdatedAt: s.now().UTC()}
-	if b, err := os.ReadFile(s.paths.Cert); err == nil {
+	if b, err := readFile(s.paths.Cert); err == nil {
 		if c, err := parseOneCert(b); err == nil {
 			rec.Serial = serialText(c)
 			rec.NotAfter = c.NotAfter.UTC()
@@ -686,13 +711,18 @@ func (s *Store) writeAtRest(seq uint64) error {
 // checkLive verifies that the live key matches the live certificate. With
 // allowEmpty, a missing or empty certificate (an unregistered node) passes.
 func (s *Store) checkLive(allowEmpty bool) error {
-	certPEM, cerr := os.ReadFile(s.paths.Cert)
+	certPEM, cerr := readFile(s.paths.Cert)
 	if allowEmpty && (errors.Is(cerr, fs.ErrNotExist) || (cerr == nil && len(certPEM) == 0)) {
 		return nil
 	}
-	keyPEM, kerr := os.ReadFile(s.paths.Key)
+	keyPEM, kerr := readFile(s.paths.Key)
 	if err := errors.Join(cerr, kerr); err != nil {
-		return fmt.Errorf("%w: %v", ErrStoreDamaged, err)
+		// A missing live file after recovery is damage; any other read
+		// error is only an error.
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: %v", ErrStoreDamaged, err)
+		}
+		return err
 	}
 	if _, err := tls.X509KeyPair(certPEM, keyPEM); err != nil {
 		roslog.E("Live client key does not match the live certificate", err)
