@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/l2sec"
@@ -146,6 +147,34 @@ func chooseClientCertificate(certs []tls.Certificate, withheld *atomic.Bool) fun
 		withheld.Store(true)
 		return &tls.Certificate{}, nil
 	}
+}
+
+// CheckHeldCertificate reads the held client certificate and returns a
+// CertificateExpiredError when it has expired (now is not before NotAfter).
+// It makes no network call, writes no log line and creates no file. A
+// certificate that does not read gives nil: the dial reports that fault.
+//
+// A caller that does local work before its dial (the VPN sync runs shell and
+// Kubernetes checks that log) calls it first, so a timed caller stays silent
+// on an expired certificate.
+func CheckHeldCertificate() error {
+	certPath, _, _ := config.MTLSPaths()
+	b, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil
+	}
+	block, _ := pem.Decode(b)
+	if block == nil {
+		return nil
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil
+	}
+	if !l2secNow().Before(leaf.NotAfter) {
+		return &CertificateExpiredError{NotAfter: leaf.NotAfter, Serial: fmt.Sprintf("%x", leaf.SerialNumber)}
+	}
+	return nil
 }
 
 // NodewardL2Sec dials the L2Sec (mTLS) operational channel and returns the

@@ -404,3 +404,31 @@ func TestClassifyClientCertRefusal(t *testing.T) {
 		t.Errorf("a refusal seen on an earlier attempt must type a reset of the last attempt, got %v", got)
 	}
 }
+
+// TestCheckHeldCertificate: an expired held certificate gives the typed
+// error; a valid, missing or unreadable one gives nil, with no log line.
+func TestCheckHeldCertificate(t *testing.T) {
+	ca := newT50CA(t, "agent CA")
+	now := time.Now()
+	logs := captureBackendLog(t)
+
+	useHeldPair(t, ca.clientLeaf(t, now.Add(-48*time.Hour), now.Add(-time.Second)), ca)
+	if err := CheckHeldCertificate(); !IsCertificateExpired(err) {
+		t.Fatalf("expired: err = %v, want CertificateExpiredError", err)
+	}
+	useHeldPair(t, ca.clientLeaf(t, now.Add(-time.Hour), now.Add(time.Hour)), ca)
+	if err := CheckHeldCertificate(); err != nil {
+		t.Fatalf("valid: err = %v, want nil", err)
+	}
+	missing := filepath.Join(t.TempDir(), "absent.crt")
+	viper.Set("mtls.crt", missing)
+	if err := CheckHeldCertificate(); err != nil {
+		t.Fatalf("missing: err = %v, want nil", err)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the check created the certificate file")
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("the check wrote log lines: %s", logs.String())
+	}
+}

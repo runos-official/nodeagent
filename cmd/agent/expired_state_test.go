@@ -29,6 +29,7 @@ import (
 	"github.com/runos-official/nodeagent/uc/certpolicy"
 	"github.com/runos-official/nodeagent/uc/certrenew"
 	"github.com/runos-official/nodeagent/uc/certstore"
+	syncUc "github.com/runos-official/nodeagent/uc/sync"
 )
 
 // testNID is a made-up node id.
@@ -648,9 +649,10 @@ func (c streamClient) NodeAgentStream(context.Context, ...grpc.CallOption) (grpc
 // TestQuietExpiryWithOpenStream (criterion 8): a leaf expires while the
 // stream stays open. The real connection code runs over a fake stream: the
 // renewal loop, the reporter, the control-plane poll of the HAProxy service,
-// the VPN resync ticker and the lifecycle node log. The VPN sync and the node
-// log run their real L2Sec dial once the leaf expired (before it they report
-// success, because this test has no Nodeward and no wg0). Over 3 hours: one
+// the VPN resync ticker and the lifecycle node log. Once the leaf expired the
+// VPN sync is the real ForceVpnSyncWithCount and the node log is the real
+// backend.AddNodelog (before it they report success, because this test has no
+// Nodeward and no wg0). Over 3 hours: one
 // ERROR line at expiry and at most 3 more, no other WARN or ERROR line, no
 // dial and no close of the stream by the agent.
 func TestQuietExpiryWithOpenStream(t *testing.T) {
@@ -679,12 +681,10 @@ func TestQuietExpiryWithOpenStream(t *testing.T) {
 			if !expired.Load() {
 				return 0, nil
 			}
+			// After the expiry the real VPN sync runs, with its WireGuard
+			// and Kubernetes checks behind the certificate check.
 			syncCalls.Add(1)
-			_, _, _, conn, err := backend.NodewardL2Sec()
-			if conn != nil {
-				conn.Close()
-			}
-			return 0, err
+			return syncUc.ForceVpnSyncWithCount()
 		}
 		addNodelog = func(sev int, typ, msg string) error {
 			if !expired.Load() {
