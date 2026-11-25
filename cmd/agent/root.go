@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/certificate"
+	"github.com/runos-official/nodeagent/uc/certstore"
 	syncUc "github.com/runos-official/nodeagent/uc/sync"
 
 	"time"
@@ -45,69 +45,81 @@ agent verifies its mTLS certificate before starting.`,
 	Example: "  runos agent",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Precondition: this node must be registered, i.e. the mTLS cert/key/CA
-		// must exist, be non-empty and parseable. Starting without them would
-		// fail every Nodeward dial with an opaque mTLS error and spin forever in
-		// the supervised reconnect loop, so fail fast with an actionable remedy.
-		if err := checkRegistered(); err != nil {
-			return err
-		}
+		return start(agentLockPath, func() {
+			// Restore the wg0 boot ordering override before anything else, so this node's NEXT boot
+			// brings the tunnel up without waiting on dnsmasq (commons/wireguard_boot.go). One read
+			// on a healthy node; a rewrite plus daemon-reload on one installed before the reset.
+			commons.EnsureWg0BootOrder()
 
-		// Take an advisory, exclusive flock so a second `runos agent` cannot race
-		// this one over :6446 / wg0. Held for the process lifetime; the fd is
-		// intentionally leaked (released by the kernel on exit). A non-permission
-		// failure to acquire the lock means another agent already holds it.
-		lockFile, err := acquireAgentLock()
-		if err != nil {
-			return err
-		}
-		if lockFile != nil {
-			defer lockFile.Close()
-		}
-
-		// Check certificate expiry and auto-renew if needed. If the certificate
-		// has ALREADY expired and renewal failed, do not continue into a
-		// guaranteed mTLS handshake failure: fail fast with a remedy.
-		renewed, err := certificate.CheckAndAutoRenew()
-		if err != nil {
-			if expired, expiry := certificateExpired(); expired {
-				return roslog.Fail(
-					"Start agent",
-					fmt.Sprintf("mTLS certificate expired on %s and automatic renewal failed: %v", expiry.Format(time.RFC3339), err),
-					"check connectivity to the Nodeward control plane, then run `runos certificate renew`; if it keeps failing, re-register this node from the console",
-				)
-			}
-			roslog.E("Certificate auto-renewal check failed", err)
-		} else if renewed {
-			roslog.I("Certificate was automatically renewed")
-		}
-
-		// Restore the wg0 boot ordering override before anything else, so this node's NEXT boot
-		// brings the tunnel up without waiting on dnsmasq (commons/wireguard_boot.go). One read
-		// on a healthy node; a rewrite plus daemon-reload on one installed before the reset.
-		commons.EnsureWg0BootOrder()
-
-		// VPN peer sync now runs inside runConnection on every (re)connect, plus a
-		// periodic self-heal ticker (see startVpnResyncTicker). Doing it here as a
-		// one-shot ran before the network was routable on a hibernate/wake, failed
-		// silently (it only logged), and was never retried, leaving wg0 with no
-		// peers until a manual `systemctl restart runos`. runConnection only syncs
-		// after the stream connects (network confirmed up), so the wake case now
-		// self-heals.
-		runAgent()
-		return nil
+			// VPN peer sync now runs inside runConnection on every (re)connect, plus a
+			// periodic self-heal ticker (see startVpnResyncTicker). Doing it here as a
+			// one-shot ran before the network was routable on a hibernate/wake, failed
+			// silently (it only logged), and was never retried, leaving wg0 with no
+			// peers until a manual `systemctl restart runos`. runConnection only syncs
+			// after the stream connects (network confirmed up), so the wake case now
+			// self-heals.
+			runAgent()
+		})
 	},
+}
+
+// start is the start path of `runos agent` up to the first dial. lockPath is
+// the agent lock; run starts the agent services. Tests inject both.
+func start(lockPath string, run func()) error {
+	// Take an advisory, exclusive flock so a second `runos agent` cannot race
+	// this one over :6446 / wg0. Held for the process lifetime; the fd is
+	// intentionally leaked (released by the kernel on exit). A non-permission
+	// failure to acquire the lock means another agent already holds it.
+	lockFile, err := acquireAgentLock(lockPath)
+	if err != nil {
+		return err
+	}
+	if lockFile != nil {
+		defer lockFile.Close()
+	}
+
+	// Bring the certificate store to rest BEFORE the registration check: a
+	// crash between the key rename and the certificate rename of an adoption
+	// leaves a key that does not match the certificate, and only the
+	// recovery repairs it. On an unregistered node this changes nothing.
+	certificate.RecoverAtStart()
+
+	// Precondition: this node must be registered, i.e. the mTLS cert/key/CA
+	// must exist, be non-empty and parseable. Starting without them would
+	// fail every Nodeward dial with an opaque mTLS error and spin forever in
+	// the supervised reconnect loop, so fail fast with an actionable remedy.
+	if err := checkRegistered(); err != nil {
+		return err
+	}
+
+	// Check certificate expiry and auto-renew if needed. If the certificate
+	// has ALREADY expired and renewal failed, do not continue into a
+	// guaranteed mTLS handshake failure: fail fast with a remedy.
+	renewed, err := certificate.CheckAndAutoRenew()
+	if err != nil {
+		if expired, expiry := certificateExpired(); expired {
+			return roslog.Fail(
+				"Start agent",
+				fmt.Sprintf("mTLS certificate expired on %s and automatic renewal failed: %v", expiry.Format(time.RFC3339), err),
+				"check connectivity to the Nodeward control plane, then run `runos certificate renew`; if it keeps failing, re-register this node from the console",
+			)
+		}
+		roslog.E("Certificate auto-renewal check failed", err)
+	} else if renewed {
+		roslog.I("Certificate was automatically renewed")
+	}
+
+	run()
+	return nil
 }
 
 // checkRegistered verifies this node is registered: the mTLS client certificate,
 // private key and CA all exist, are non-empty, and the cert/key load as a valid
 // keypair. On any failure it returns an already-reported roslog.Fail with the
-// remedy to register. config.Get*Path create an empty file if missing, so an
-// "empty" file is the unregistered case.
+// remedy to register. It reads the configured paths without creating a file;
+// a missing or empty file is the unregistered case.
 func checkRegistered() error {
-	certPath := config.GetPublicKeyPath()
-	keyPath := config.GetPrivateKeyPath()
-	caPath := config.GetCACertPath()
+	certPath, keyPath, caPath := config.MTLSPaths()
 
 	for _, p := range []struct{ kind, path string }{
 		{"mTLS certificate", certPath},
@@ -126,7 +138,7 @@ func checkRegistered() error {
 
 	// Both cert and key are present and non-empty: confirm they parse as a valid
 	// mTLS keypair so we catch a truncated / corrupt registration before dialing.
-	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+	if _, err := certstore.LoadKeyPair(certPath, keyPath); err != nil {
 		return roslog.Fail(
 			"Start agent",
 			fmt.Sprintf("this node's mTLS certificate/key is unreadable or corrupt (%v)", err),
@@ -154,7 +166,7 @@ func certificateExpired() (bool, time.Time) {
 // returns an already-reported roslog.Fail. Inability to create/open the lock
 // file (e.g. /run not writable in an unusual environment) is treated as a soft
 // failure: it logs a warning and returns (nil, nil) so the agent still starts.
-func acquireAgentLock() (*os.File, error) {
+func acquireAgentLock(agentLockPath string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(agentLockPath), 0755); err != nil {
 		roslog.W("Could not create agent lock directory; skipping single-instance lock", err, "path", agentLockPath)
 		return nil, nil

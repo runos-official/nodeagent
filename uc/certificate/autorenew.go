@@ -8,11 +8,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/certpolicy"
-	"github.com/runos-official/nodeagent/uc/registernode"
+	"github.com/runos-official/nodeagent/uc/certstore"
 )
 
 // GetCertificateExpiration reads the mTLS certificate and returns its expiration time
@@ -91,77 +90,20 @@ func CheckAndAutoRenew() (bool, error) {
 	return true, nil
 }
 
-// performAutoRenewal handles the automatic certificate renewal process
+// performAutoRenewal renews the certificate through the shared renewal
+// function. A certificate that another process already renewed is a
+// success.
 func performAutoRenewal() error {
 	roslog.I("Starting automatic certificate renewal")
-
-	// Step 1: Backup existing certificates
-	backupDir, err := backupCertificates()
+	d := defaultDeps("CertificateAutoRenewal", "Certificate automatically renewed")
+	// The serial of the certificate that the caller just evaluated.
+	d.ExpectedSerial, _ = certstore.Open(d.Paths).HeldSerial()
+	res, err := renewOnce(context.Background(), d)
 	if err != nil {
-		roslog.E("Failed to backup certificates during auto-renewal", err)
-		return fmt.Errorf("backup failed: %w", err)
+		roslog.E("Automatic certificate renewal failed", err)
+		return err
 	}
-	roslog.I("Certificates backed up", "backup_dir", backupDir)
-
-	// Step 2: Connect to Nodeward and request new certificate
-	roslog.I("Connecting to Nodeward for certificate renewal")
-	c, _, cancel, conn, err := backend.NodewardL2Sec()
-	if err != nil {
-		roslog.E("Failed to connect to Nodeward for certificate auto-renewal", err)
-		return fmt.Errorf("connect failed: %w", err)
-	}
-	defer cancel()
-	defer conn.Close()
-
-	// Create context with timeout for the renewal operation
-	ctx, cancelCtx := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelCtx()
-
-	// Step 3: Call RegenerateCertificate RPC
-	roslog.I("Requesting new certificate from Nodeward")
-	paths := registernode.DefaultCredPaths()
-	response, err := requestCertificate(ctx, c, paths, time.Now)
-	if err != nil {
-		roslog.E("Failed to regenerate certificate", err)
-		cleanupBackup(backupDir)
-		return fmt.Errorf("regenerate certificate RPC failed: %w", err)
-	}
-	roslog.I("New certificate received from Nodeward")
-
-	// Step 4: Write new certificates to disk
-	if err := writeCertificates(response, paths); err != nil {
-		roslog.E("Failed to write new certificates", err)
-		// Attempt to restore from backup
-		if restoreErr := restoreCertificates(backupDir); restoreErr != nil {
-			roslog.E("Failed to restore certificates from backup", restoreErr, "backup_dir", backupDir)
-			return fmt.Errorf("write failed and restore failed: %w (restore error: %v)", err, restoreErr)
-		}
-		roslog.I("Certificates restored from backup after write failure")
-		return fmt.Errorf("write certificates failed: %w", err)
-	}
-	roslog.I("New certificates written to disk")
-
-	// Step 5: Test new certificates
-	if err := testNewCertificates(); err != nil {
-		roslog.E("New certificate test failed", err)
-		// Attempt to restore from backup
-		if restoreErr := restoreCertificates(backupDir); restoreErr != nil {
-			roslog.E("Failed to restore certificates from backup", restoreErr, "backup_dir", backupDir)
-			return fmt.Errorf("test failed and restore failed: %w (restore error: %v)", err, restoreErr)
-		}
-		roslog.I("Certificates restored from backup after test failure")
-		return fmt.Errorf("certificate test failed: %w", err)
-	}
-	roslog.I("New certificates validated successfully")
-
-	// Step 6: Cleanup backup
-	cleanupBackup(backupDir)
-
-	// Log the renewal to Nodeward
-	if err := backend.AddNodelog(3, "CertificateAutoRenewal", "Certificate automatically renewed"); err != nil {
-		roslog.W("Failed to log certificate renewal to Nodeward", err)
-	}
-
-	roslog.I("Automatic certificate renewal completed successfully")
+	roslog.I("Automatic certificate renewal completed", "status", res.Status, "serial", res.Serial,
+		"not_after", res.NotAfter.Format(time.RFC3339))
 	return nil
 }
