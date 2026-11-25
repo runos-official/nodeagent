@@ -137,7 +137,7 @@ func csrNodeward(t *testing.T, ca *csrtest.CA, p certstore.Paths) func(*l2sec.Re
 }
 
 // renewVia runs the shared renewal function against the fake Nodeward c.
-func renewVia(t *testing.T, c mintClient, p certstore.Paths) (Result, error) {
+func renewVia(t *testing.T, c MintClient, p certstore.Paths) (Result, error) {
 	t.Helper()
 	d, _ := newDeps(p, c)
 	return renewOnce(context.Background(), d)

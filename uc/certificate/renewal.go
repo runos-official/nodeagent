@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/certpolicy"
 	"github.com/runos-official/nodeagent/uc/certstore"
 	"github.com/runos-official/nodeagent/uc/csrcert"
 )
@@ -52,14 +52,6 @@ const (
 	lockProbe = time.Millisecond
 )
 
-// preMintPrefixes start the refusals that Nodeward sends before it mints.
-// Such a refusal under a "may be lost" code is not a lost answer.
-var preMintPrefixes = []string{
-	"could not check the minting rules",
-	"could not check the mint proof",
-	"authentication check failed",
-}
-
 // Result is the outcome of one renewal.
 type Result struct {
 	Status string
@@ -71,8 +63,8 @@ type Result struct {
 	NodeLogFailed bool
 }
 
-// mintClient is the Nodeward method that a renewal calls.
-type mintClient interface {
+// MintClient is the Nodeward method that a renewal calls.
+type MintClient interface {
 	RegenerateCertificate(ctx context.Context, in *l2sec.RegenerateCertificateRequest, opts ...grpc.CallOption) (*l2sec.RegenerateCertificateResponse, error)
 }
 
@@ -104,7 +96,7 @@ const (
 type deps struct {
 	Paths certstore.Paths
 	// Dial opens one connection for the whole mint sequence. close ends it.
-	Dial func(ctx context.Context) (c mintClient, close func(), err error)
+	Dial func(ctx context.Context) (c MintClient, close func(), err error)
 	// NodeLog sends one node log entry after an adoption.
 	NodeLog func(event, message string) error
 	// Event and Message are the node log entry of this caller.
@@ -116,6 +108,7 @@ type deps struct {
 	// LockWait is the renewal lock wait; zero means the store default.
 	LockWait time.Duration
 	// LostResponse says that the answer of a failed mint call may be lost.
+	// Every caller uses the classifier of the policy package.
 	LostResponse func(error) bool
 	// ExpectedSerial is the serial of the certificate that the caller
 	// evaluated when it decided to renew. "" skips that check.
@@ -136,8 +129,50 @@ func defaultDeps(event, message string) deps {
 		Message:      message,
 		Now:          time.Now,
 		Sleep:        sleepCtx,
-		LostResponse: MayBeLost,
+		LostResponse: classifierLost,
 	}
+}
+
+// Options are the inputs of Renew. Event, Message, ExpectedSerial and
+// LostResponse are the caller's; Paths, Dial and NodeLog are test seams.
+type Options struct {
+	// Event and Message are the node log entry after an adoption.
+	Event   string
+	Message string
+	// ExpectedSerial is the serial of the certificate that the caller
+	// evaluated when it decided to renew. "" skips that check.
+	ExpectedSerial string
+	// LostResponse says that the answer of a failed mint call may be lost.
+	// nil uses the classifier of the policy package with no prior.
+	LostResponse func(error) bool
+	// Paths are the credential paths; the zero value uses the configured
+	// paths.
+	Paths certstore.Paths
+	// Dial opens the Nodeward connection; nil dials L2Sec.
+	Dial func(ctx context.Context) (c MintClient, close func(), err error)
+	// NodeLog sends the node log entry; nil uses the backend.
+	NodeLog func(event, message string) error
+}
+
+// Renew is the one renewal function for every caller outside this package
+// (the renewal loop of the agent). It takes the renewal lock, recovers the
+// store, mints with a fresh key and adopts the child.
+func Renew(ctx context.Context, o Options) (Result, error) {
+	d := defaultDeps(o.Event, o.Message)
+	d.ExpectedSerial = o.ExpectedSerial
+	if o.LostResponse != nil {
+		d.LostResponse = o.LostResponse
+	}
+	if o.Paths != (certstore.Paths{}) {
+		d.Paths = o.Paths
+	}
+	if o.Dial != nil {
+		d.Dial = o.Dial
+	}
+	if o.NodeLog != nil {
+		d.NodeLog = o.NodeLog
+	}
+	return renewOnce(ctx, d)
 }
 
 // configuredPaths reads the credential paths. It creates no file.
@@ -146,7 +181,7 @@ func configuredPaths() certstore.Paths {
 	return certstore.Paths{Cert: cert, Key: key, CA: ca}
 }
 
-func dialNodeward(context.Context) (mintClient, func(), error) {
+func dialNodeward(context.Context) (MintClient, func(), error) {
 	c, _, cancel, conn, err := backend.NodewardL2Sec()
 	if err != nil {
 		return nil, nil, err
@@ -168,27 +203,10 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// MayBeLost is the default lost-response predicate. The answer of a failed
-// mint call may be lost when the gRPC code is Unavailable,
-// DeadlineExceeded, Canceled, Internal or Unknown, and the text does not
-// start with a refusal that Nodeward sends before a mint. An error that is
-// not a gRPC status (a local failure) is never a lost answer.
-func MayBeLost(err error) bool {
-	st, ok := status.FromError(err)
-	if !ok || err == nil {
-		return false
-	}
-	switch st.Code() {
-	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled, codes.Internal, codes.Unknown:
-	default:
-		return false
-	}
-	for _, p := range preMintPrefixes {
-		if strings.HasPrefix(st.Message(), p) {
-			return false
-		}
-	}
-	return true
+// classifierLost is the lost-response predicate with no prior: the
+// classifier of the policy package decides (certpolicy.Classify).
+func classifierLost(err error) bool {
+	return certpolicy.Classify(err, certpolicy.Prior{}).ResponseMayBeLost
 }
 
 // renewOnce is the one renewal function. It holds the renewal lock,
@@ -386,7 +404,9 @@ func mint(ctx context.Context, d deps) (certstore.Material, error) {
 			return got.material()
 		}
 		lastErr = err
-		lost := errors.Is(err, csrcert.ErrUnusableResponse) || d.LostResponse(err)
+		// The predicate hears every failed call, also an unusable answer,
+		// so a caller that tracks lost answers sees each one.
+		lost := d.LostResponse(err) || errors.Is(err, csrcert.ErrUnusableResponse)
 		switch {
 		case attempt == 1 && lost:
 			roslog.W("The renewal answer may be lost; asking again at once with a fresh key", err, "attempt", attempt)
