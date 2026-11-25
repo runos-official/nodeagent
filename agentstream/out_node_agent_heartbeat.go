@@ -116,7 +116,9 @@ func rebootDetector() {
 	// Check if the file exists
 	_, err := os.Stat(rebootFlagPath)
 	if os.IsNotExist(err) {
-		if err := backend.AddNodelog(2, "RebootDetected", "A system reboot or startup has been detected"); err != nil {
+		// An expired certificate is silent: the dial makes no connection
+		// and the agent's expired reporter owns the line.
+		if err := backend.AddNodelog(2, "RebootDetected", "A system reboot or startup has been detected"); err != nil && !backend.IsCertificateExpired(err) {
 			roslog.E("Error adding nodelog", err)
 		}
 

@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/certpolicy"
 	"github.com/runos-official/nodeagent/uc/certstore"
 )
 
@@ -71,6 +73,27 @@ func renewCertificate(jsonOut bool, d deps, out io.Writer) error {
 		return roslog.Fail(step, cause, remedy)
 	}
 
+	// expiredFail reports an expired held certificate. The command sends no
+	// request: the renewal authenticates with the held certificate, so it
+	// cannot work. The remedy is the one expired text; in JSON mode the error
+	// member holds the cause and the text.
+	expiredFail := func(e *backend.CertificateExpiredError) error {
+		cause := e.Error()
+		remedy := certpolicy.ExpiredRemedy(e.NotAfter)
+		if jsonOut {
+			roslog.E("Renew certificate: check the held certificate", errors.New(cause))
+			emitJSONError(out, cause+". "+remedy)
+			return roslog.AlreadyReported(fmt.Errorf("Renew certificate: check the held certificate: %s", cause))
+		}
+		return fail("Renew certificate: check the held certificate", cause, remedy)
+	}
+
+	// The held certificate is read before the renewal lock, so an expired
+	// certificate never waits for the lock and sends no request.
+	if held, err := liveResult(d.Paths, ""); err == nil && !d.Now().Before(held.NotAfter) {
+		return expiredFail(&backend.CertificateExpiredError{NotAfter: held.NotAfter, Serial: held.Serial})
+	}
+
 	progress("\n╔═══════════════════════════════════════════════╗\n")
 	progress("║   RunOS Certificate Renewal                   ║\n")
 	progress("╚═══════════════════════════════════════════════╝\n\n")
@@ -93,6 +116,8 @@ func renewCertificate(jsonOut bool, d deps, out io.Writer) error {
 	if err != nil {
 		var dialErr *dialError
 		switch {
+		case backend.IsCertificateExpired(err):
+			return expiredFail(backend.AsCertificateExpired(err))
 		case errors.Is(err, certstore.ErrRenewalInProgress):
 			return fail("Renew certificate: take the renewal lock", certstore.ErrRenewalInProgress.Error(),
 				"wait for the other renewal to end, then run the command again")

@@ -91,44 +91,6 @@ func TestStartDoesNotRenewBeforeConnection(t *testing.T) {
 	}
 }
 
-// TestExpiredAtStartDecidesLocally: an expired certificate ends the start
-// with the cause "mTLS certificate expired on <time>", no dial and a remedy
-// that does not name the renew command.
-func TestExpiredAtStartDecidesLocally(t *testing.T) {
-	dir := t.TempDir()
-	p := useCredDir(t, dir)
-	now := time.Now().UTC().Truncate(time.Second)
-	notAfter := now.Add(-time.Hour)
-	writeMaterial(t, p, timedMaterial(t, now.Add(-48*time.Hour), notAfter))
-	logs := captureStartLog(t)
-
-	err := start(filepath.Join(t.TempDir(), "agent.lock"), func() { t.Fatal("start ran the agent") })
-	if err == nil {
-		t.Fatal("start accepted an expired certificate")
-	}
-	wantCause := "mTLS certificate expired on " + notAfter.Format(time.RFC3339)
-	var failLine map[string]any
-	for _, l := range logMessages(t, logs) {
-		msg, _ := l["msg"].(string)
-		if strings.Contains(msg, "Connecting to nodeward") || strings.Contains(msg, "Requesting a renewed certificate") {
-			t.Fatalf("the start path dialed: %v", l)
-		}
-		if l["step"] == "Start agent" {
-			failLine = l
-		}
-	}
-	if failLine == nil || failLine["cause"] != wantCause {
-		t.Fatalf("failure line = %v, want the cause %q", failLine, wantCause)
-	}
-	remedy, _ := failLine["remedy"].(string)
-	if remedy != certpolicy.ExpiredRemedy(notAfter) || strings.Contains(remedy, "runos certificate renew") {
-		t.Fatalf("remedy = %q", remedy)
-	}
-	if !strings.Contains(err.Error(), wantCause) {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 // TestCheckAndAutoRenewGone: the start-time renewal functions are deleted
 // from the tree. This file names them in the test name and is skipped.
 func TestCheckAndAutoRenewGone(t *testing.T) {

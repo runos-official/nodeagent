@@ -31,7 +31,7 @@ func runSupervisorWith(t *testing.T, b *commons.Backoff, conns []fakeConnection)
 		return c.shutdown, c.upFor
 	}
 	wait := func(_ context.Context, d time.Duration) { waits = append(waits, d) }
-	superviseConnections(context.Background(), b, connect, wait)
+	superviseConnections(context.Background(), b, connect, wait, validHold())
 	if i != len(conns) {
 		t.Fatalf("supervisor made %d connections, want %d", i, len(conns))
 	}
