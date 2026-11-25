@@ -53,11 +53,11 @@ func (e *env) advance(d time.Duration) {
 
 // newDeps gives test dependencies: the fake Nodeward c, a clock that Sleep
 // advances without sleeping, and a recorded node log.
-func newDeps(p certstore.Paths, c mintClient) (deps, *env) {
+func newDeps(p certstore.Paths, c MintClient) (deps, *env) {
 	e := &env{}
 	return deps{
 		Paths: p,
-		Dial: func(context.Context) (mintClient, func(), error) {
+		Dial: func(context.Context) (MintClient, func(), error) {
 			e.mu.Lock()
 			e.dials++
 			e.mu.Unlock()
@@ -80,7 +80,7 @@ func newDeps(p certstore.Paths, c mintClient) (deps, *env) {
 			return nil
 		},
 		LockWait:     2 * time.Second,
-		LostResponse: MayBeLost,
+		LostResponse: classifierLost,
 	}, e
 }
 
@@ -372,8 +372,14 @@ func TestLostResponseRetriesWithFreshKey(t *testing.T) {
 			_, foreign := ca.LegacyPair(t)
 			return &l2sec.RegenerateCertificateResponse{CertificatePem: foreign, CaCert: ca.PEM}
 		}}, {mint: true}}, wantCalls: 2},
-		{name: "pre-mint refusal under Unavailable", steps: []step{
+		// The classifier counts this text as a possibly lost answer: the
+		// mint lock can fail after the mint.
+		{name: "mint check refusal under Unavailable", steps: []step{
 			{err: status.Error(codes.Unavailable, "could not check the minting rules: database unavailable")},
+			{err: status.Error(codes.Unavailable, "could not check the minting rules: database unavailable")},
+		}, wantCalls: 2, wantErr: codes.Unavailable},
+		{name: "pre-mint refusal", steps: []step{
+			{err: status.Error(codes.Unavailable, "could not check the mint proof: database unavailable")},
 		}, wantCalls: 1, wantErr: codes.Unavailable},
 		{name: "busy on the retry", steps: []step{{mint: true, err: lost}, {err: busy}, {mint: true}},
 			wantCalls: 3, wantSleeps: []time.Duration{busyWait}},
@@ -690,7 +696,7 @@ func TestFailedMintLeavesNoParentCopy(t *testing.T) {
 
 	t.Run("dial failure", func(t *testing.T) {
 		d, _ := newDeps(p, noMint(t))
-		d.Dial = func(context.Context) (mintClient, func(), error) { return nil, nil, errors.New("no route to host") }
+		d.Dial = func(context.Context) (MintClient, func(), error) { return nil, nil, errors.New("no route to host") }
 		_, err := renewOnce(context.Background(), d)
 		var de *dialError
 		if !errors.As(err, &de) {
@@ -720,7 +726,10 @@ func TestDamagedStoreEndsRenewal(t *testing.T) {
 	}
 }
 
-func TestMayBeLost(t *testing.T) {
+// TestClassifierLost: the lost-response predicate of the renewal function
+// is the classifier of the policy package. It replaced a separate default
+// predicate; the cases marked "changed" answered false there.
+func TestClassifierLost(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		want bool
@@ -730,16 +739,20 @@ func TestMayBeLost(t *testing.T) {
 		{status.Error(codes.Canceled, "canceled"), true},
 		{status.Error(codes.Internal, "stream terminated"), true},
 		{status.Error(codes.Unknown, "eof"), true},
-		{status.Error(codes.Unavailable, "could not check the minting rules: x"), false},
+		// changed: Nodeward also sends this text when the mint lock fails
+		// after the mint.
+		{status.Error(codes.Unavailable, "could not check the minting rules: x"), true},
 		{status.Error(codes.Unavailable, "could not check the mint proof: x"), false},
 		{status.Error(codes.Unavailable, "authentication check failed: x"), false},
 		{status.Error(codes.ResourceExhausted, "busy"), false},
-		{status.Error(codes.FailedPrecondition, "renewal is not open"), false},
-		{errors.New("load current certificate and key"), false},
-		{nil, false},
+		{status.Error(codes.FailedPrecondition, "certificate is not inside its renewal window; renewal opens at 2026-01-01T00:00:00Z"), false},
+		{status.Error(codes.FailedPrecondition, "certificate was already regenerated"), false},
+		// changed: an unknown text proves nothing about the mint.
+		{status.Error(codes.FailedPrecondition, "renewal is not open"), true},
+		{fmt.Errorf("wrapped: %w", status.Error(codes.PermissionDenied, "mint proof signature does not verify")), false},
 	} {
-		if got := MayBeLost(tc.err); got != tc.want {
-			t.Errorf("MayBeLost(%v) = %v, want %v", tc.err, got, tc.want)
+		if got := classifierLost(tc.err); got != tc.want {
+			t.Errorf("classifierLost(%v) = %v, want %v", tc.err, got, tc.want)
 		}
 	}
 }

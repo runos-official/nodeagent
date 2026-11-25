@@ -25,7 +25,7 @@ type issued struct {
 // nodeward returns a key, which is used as before. Errors never cause a
 // legacy request. Nothing is written here. callTimeout gives the timeout of
 // each wire call.
-func requestCertificate(ctx context.Context, c mintClient, p certstore.Paths, now func() time.Time, callTimeout func() time.Duration) (*issued, error) {
+func requestCertificate(ctx context.Context, c MintClient, p certstore.Paths, now func() time.Time, callTimeout func() time.Duration) (*issued, error) {
 	current, err := certstore.LoadKeyPair(p.Cert, p.Key)
 	if err != nil {
 		return nil, fmt.Errorf("load current certificate and key: %w", err)

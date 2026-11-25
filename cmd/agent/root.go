@@ -17,6 +17,8 @@ import (
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/certificate"
+	"github.com/runos-official/nodeagent/uc/certpolicy"
+	"github.com/runos-official/nodeagent/uc/certrenew"
 	"github.com/runos-official/nodeagent/uc/certstore"
 	syncUc "github.com/runos-official/nodeagent/uc/sync"
 
@@ -92,21 +94,16 @@ func start(lockPath string, run func()) error {
 		return err
 	}
 
-	// Check certificate expiry and auto-renew if needed. If the certificate
-	// has ALREADY expired and renewal failed, do not continue into a
-	// guaranteed mTLS handshake failure: fail fast with a remedy.
-	renewed, err := certificate.CheckAndAutoRenew()
-	if err != nil {
-		if expired, expiry := certificateExpired(); expired {
-			return roslog.Fail(
-				"Start agent",
-				fmt.Sprintf("mTLS certificate expired on %s and automatic renewal failed: %v", expiry.Format(time.RFC3339), err),
-				"check connectivity to the Nodeward control plane, then run `runos certificate renew`; if it keeps failing, re-register this node from the console",
-			)
-		}
-		roslog.E("Certificate auto-renewal check failed", err)
-	} else if renewed {
-		roslog.I("Certificate was automatically renewed")
+	// An expired certificate cannot dial and cannot renew. The decision is
+	// a local read; no renewal request runs at start. Renewal while the
+	// agent runs is the job of the renewal loop (uc/certrenew), which
+	// starts after this check.
+	if expired, expiry := certificateExpired(); expired {
+		return roslog.Fail(
+			"Start agent",
+			fmt.Sprintf("mTLS certificate expired on %s", expiry.UTC().Format(time.RFC3339)),
+			certpolicy.ExpiredRemedy(expiry),
+		)
 	}
 
 	run()
@@ -290,7 +287,20 @@ func runAgent() {
 
 	go handleSignals(sigChan, roslog.ReopenLogFile, rootCancel)
 
-	superviseConnections(rootCtx, commons.NewReconnectBackoff(), runConnection, waitOrDone)
+	// One certificate renewal loop for the life of this process. It starts
+	// before the first dial and waits for a connected stream before its
+	// first request. A reconnect does not start, stop or reset it.
+	renewal := certrenew.New(certrenew.Deps{})
+	renewal.Start(rootCtx)
+
+	superviseConnections(rootCtx, commons.NewReconnectBackoff(), func(ctx context.Context) (bool, time.Duration) {
+		return runConnection(ctx, renewal)
+	}, waitOrDone)
+
+	// Give a renewal attempt in progress time to adopt its child.
+	if !renewal.Wait(certrenew.ShutdownWait) {
+		roslog.W("Certificate renewal attempt still running at shutdown; the certificate store repairs it at the next start", nil)
+	}
 
 	roslog.I("Agent terminated")
 }
@@ -335,7 +345,8 @@ func waitOrDone(ctx context.Context, d time.Duration) {
 // cancelled (permanent shutdown), false on a recoverable error that should
 // trigger a reconnect. upFor is how long the stream stayed up (0 when it never
 // came up); the caller resets the reconnect backoff after a long enough run.
-func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration) {
+// renewal hears when the stream is up and when it ends; it may be nil.
+func runConnection(rootCtx context.Context, renewal *certrenew.Loop) (shutdown bool, upFor time.Duration) {
 	// Per-connection context: cancelled when this connection ends so all of its
 	// services unwind, independent of rootCtx (which spans all connections).
 	connCtx, connCancel := context.WithCancel(rootCtx)
@@ -356,6 +367,10 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 		return rootCtx.Err() != nil, 0
 	}
 	connectedAt := time.Now()
+	// The renewal loop waits for a connected stream before a request. The
+	// signals change no schedule.
+	renewal.NotifyConnected()
+	defer renewal.NotifyDisconnected()
 
 	roslog.D("Stream established, starting services")
 
