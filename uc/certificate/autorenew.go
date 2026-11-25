@@ -11,50 +11,69 @@ import (
 	"github.com/runos-official/nodeagent/backend"
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/certpolicy"
 	"github.com/runos-official/nodeagent/uc/registernode"
-)
-
-const (
-	// RenewalThresholdDays is the number of days before expiry when auto-renewal should trigger
-	RenewalThresholdDays = 30
 )
 
 // GetCertificateExpiration reads the mTLS certificate and returns its expiration time
 func GetCertificateExpiration() (time.Time, error) {
+	_, notAfter, err := GetCertificateValidity()
+	return notAfter, err
+}
+
+// GetCertificateValidity reads the mTLS certificate and returns its
+// NotBefore and NotAfter.
+func GetCertificateValidity() (notBefore, notAfter time.Time, err error) {
 	certPath := config.GetPublicKeyPath()
 	data, err := os.ReadFile(certPath)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to read certificate: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("failed to read certificate: %w", err)
 	}
 
 	block, _ := pem.Decode(data)
 	if block == nil {
-		return time.Time{}, fmt.Errorf("failed to decode PEM block")
+		return time.Time{}, time.Time{}, fmt.Errorf("failed to decode PEM block")
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse certificate: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
-	return cert.NotAfter, nil
+	return cert.NotBefore, cert.NotAfter, nil
+}
+
+// RenewalTiming gives the renewal timing of the held certificate at now.
+// The due point follows the certificate's own life (certpolicy.Evaluate).
+func RenewalTiming(now time.Time) (certpolicy.Timing, error) {
+	notBefore, notAfter, err := GetCertificateValidity()
+	if err != nil {
+		return certpolicy.Timing{}, err
+	}
+	return renewalTiming(notBefore, notAfter, config.GetNID(), now), nil
+}
+
+// renewalTiming is the pure part of RenewalTiming.
+func renewalTiming(notBefore, notAfter time.Time, nodeID string, now time.Time) certpolicy.Timing {
+	return certpolicy.Evaluate(notBefore, notAfter, nodeID, now)
 }
 
 // CheckAndAutoRenew checks if the certificate is expiring within the threshold
 // and automatically renews it if needed. Returns true if renewal was performed.
 func CheckAndAutoRenew() (bool, error) {
-	expiration, err := GetCertificateExpiration()
+	now := time.Now()
+	timing, err := RenewalTiming(now)
 	if err != nil {
 		return false, fmt.Errorf("failed to check certificate expiration: %w", err)
 	}
-
-	now := time.Now()
+	expiration := timing.NotAfter
 	daysRemaining := int(expiration.Sub(now).Hours() / 24)
 
-	roslog.I("Certificate expiry check", "expires", expiration.Format(time.RFC3339), "days_remaining", daysRemaining)
+	roslog.I("Certificate expiry check", "expires", expiration.Format(time.RFC3339), "days_remaining", daysRemaining,
+		"due_at", timing.DueAt.Format(time.RFC3339), "remaining", timing.Remaining.Round(time.Second).String())
 
-	if daysRemaining > RenewalThresholdDays {
-		roslog.D("Certificate not yet due for renewal", "days_remaining", daysRemaining, "threshold", RenewalThresholdDays)
+	if !timing.Due {
+		roslog.D("Certificate not yet due for renewal", "days_remaining", daysRemaining, "due_at", timing.DueAt.Format(time.RFC3339))
 		return false, nil
 	}
 
