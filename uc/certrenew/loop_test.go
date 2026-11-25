@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -665,6 +666,61 @@ func TestPanicRestartsLoop(t *testing.T) {
 		mu <- struct{}{}
 		if st := c.readState(t); st.HeldSerial == "" {
 			t.Fatal("the restarted loop wrote no state")
+		}
+	})
+}
+
+// TestExpiredCallbackReplacesTheLine: with OnExpired set, the loop writes no
+// ERROR line of its own, tells the callback at expiry and at each held
+// serial check, and still writes lastResult expired with no request.
+func TestExpiredCallbackReplacesTheLine(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		logs := captureLogs(t)
+		now := time.Now()
+		c := newCreds(t, now.Add(-2*time.Hour), now.Add(time.Minute))
+		s := &stub{steps: []func(Request) (certificate.Result, error){fails(status.Error(codes.Unavailable, "x"))}}
+		var mu sync.Mutex
+		var calls []time.Time
+		l := New(Deps{
+			Renew:     s.renew,
+			ReadLeaf:  func() (Leaf, error) { return ReadLeafFile(c.paths.Cert) },
+			NodeID:    testNodeID,
+			Rand:      func() float64 { return 0 },
+			StatePath: c.state,
+			PID:       4242,
+			OnExpired: func(Leaf) {
+				mu.Lock()
+				calls = append(calls, time.Now())
+				mu.Unlock()
+			},
+		})
+		startLoop(t, l)
+		// No stream: the attempt waits for one, and the leaf expires first
+		// when no request goes out.
+		time.Sleep(time.Minute + time.Second)
+		synctest.Wait()
+		mu.Lock()
+		first := len(calls)
+		mu.Unlock()
+		if first != 1 {
+			t.Fatalf("callback calls at expiry = %d, want 1", first)
+		}
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+		mu.Lock()
+		got := len(calls)
+		mu.Unlock()
+		if got < 20 {
+			t.Fatalf("callback calls after 10 minutes = %d, want one per 30 s check", got)
+		}
+		if n := len(logs.lines(t, ExpiredMessage)); n != 0 {
+			t.Fatalf("the loop wrote %d expired lines of its own", n)
+		}
+		if st := c.readState(t); st.LastResult != ResultExpired {
+			t.Fatalf("state = %+v, want expired", st)
+		}
+		if s.count() != 0 {
+			t.Fatalf("an expired certificate sent %d requests", s.count())
 		}
 	})
 }

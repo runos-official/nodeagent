@@ -52,6 +52,11 @@ type Deps struct {
 	StatePath string
 	// PID is the pid member of the state file.
 	PID int
+	// OnExpired, when set, hears the held leaf while it is expired: once at
+	// expiry and once at each held serial check (every 30 s) after it. It
+	// replaces the ERROR line that the loop writes itself, so the agent can
+	// report the expired state through one reporter. It must not block.
+	OnExpired func(Leaf)
 }
 
 // Loop is the renewal loop of one agent process. The methods of a nil
@@ -277,7 +282,7 @@ func (l *Loop) cycle(ctx context.Context) {
 		switch dec.Action {
 		case actExpired:
 			l.onExpired(leaf, timing, dec)
-			l.sleep(ctx, dec.At, leaf.Serial, false)
+			l.sleepExpired(ctx, dec.At, leaf)
 		case actSleep:
 			l.s.readyAt = time.Time{}
 			l.lateWarning(timing, now)
@@ -333,7 +338,9 @@ func (l *Loop) onReadError(now time.Time, err error) {
 }
 
 func (l *Loop) onExpired(leaf Leaf, timing certpolicy.Timing, dec decision) {
-	if !l.s.expiredLogged {
+	if l.d.OnExpired != nil {
+		l.d.OnExpired(leaf)
+	} else if !l.s.expiredLogged {
 		l.s.expiredLogged = true
 		roslog.E(ExpiredMessage, nil,
 			"not_after", stamp(leaf.NotAfter),
@@ -527,6 +534,27 @@ func (l *Loop) sleep(ctx context.Context, at time.Time, serial string, onConnect
 			if leaf, err := l.d.ReadLeaf(); err == nil && leaf.Serial != serial {
 				return
 			}
+		}
+	}
+}
+
+// sleepExpired is the sleep of an expired held leaf: until at, until ctx
+// ends, until the held serial changes or until the leaf is valid again (a
+// clock set back). Each held serial check tells OnExpired.
+func (l *Loop) sleepExpired(ctx context.Context, at time.Time, leaf Leaf) {
+	for ctx.Err() == nil && time.Now().Before(at) {
+		l.sleep(ctx, earliest(at, time.Now().Add(serialCheck)), "", false)
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Now().Before(leaf.NotAfter) {
+			return
+		}
+		if cur, err := l.d.ReadLeaf(); err == nil && cur.Serial != leaf.Serial {
+			return
+		}
+		if l.d.OnExpired != nil {
+			l.d.OnExpired(leaf)
 		}
 	}
 }

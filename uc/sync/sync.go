@@ -23,7 +23,16 @@ func ForceVpnSync() error {
 // ForceVpnSyncWithCount performs a manual VPN peer sync with Nodeward. It
 // returns the number of peers that were skipped (invalid / failed to apply) so
 // the caller can surface that to the operator, plus any fatal error.
+//
+// An expired held certificate returns backend.CertificateExpiredError before
+// any local work: the WireGuard and Kubernetes checks below write log lines,
+// and the periodic resync of the agent must stay silent while the
+// certificate is expired.
 func ForceVpnSyncWithCount() (int, error) {
+	if err := backend.CheckHeldCertificate(); err != nil {
+		return 0, err
+	}
+
 	// Resolve and validate the local WireGuard identity before opening the RPC,
 	// so we never advertise blank values to Nodeward.
 	wg0IP, err := getWg0IPAddress()

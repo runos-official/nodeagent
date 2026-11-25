@@ -15,6 +15,7 @@ import (
 	"github.com/runos-official/nodeagent/config"
 	"github.com/runos-official/nodeagent/k8s"
 	"github.com/runos-official/nodeagent/roslog"
+	"github.com/runos-official/nodeagent/uc/certpolicy"
 	"github.com/runos-official/nodeagent/version"
 
 	"github.com/spf13/cobra"
@@ -95,6 +96,8 @@ type certStatus struct {
 	DaysRemaining int    `json:"daysRemaining"`
 	Expired       bool   `json:"expired"`
 	Error         string `json:"error,omitempty"`
+	// notAfter is the expiry instant, for the human output.
+	notAfter time.Time
 }
 
 // logStatus is the log file section of the JSON output.
@@ -127,6 +130,9 @@ type statusReport struct {
 	// repair, so failForDegraded must not append a generic one that contradicts
 	// it. Unexported: it steers rendering and is not part of the JSON contract.
 	connectionRemedied bool
+	// certificateRefused is the TLS reason when Nodeward refused the client
+	// certificate in the handshake. Unexported, like connectionRemedied.
+	certificateRefused string
 }
 
 // getCertificateExpiration reads the mTLS certificate and returns expiration info
@@ -261,6 +267,10 @@ func gatherReport() statusReport {
 		if connErr != nil {
 			r.ConnectionError = connErr.Error()
 			r.connectionRemedied = errors.Is(connErr, backend.ErrNodewardDNS)
+			var refused *backend.ClientCertificateRefusedError
+			if errors.As(connErr, &refused) {
+				r.certificateRefused = refused.Reason
+			}
 		}
 	}
 
@@ -302,11 +312,8 @@ func gatherReport() statusReport {
 		r.Cert.Error = certErr.Error()
 		r.Degraded = true
 	} else {
-		days := int(time.Until(expiration).Hours() / 24)
-		r.Cert.Expires = expiration.Format("2006-01-02 15:04:05 MST")
-		r.Cert.DaysRemaining = days
-		if days < 0 {
-			r.Cert.Expired = true
+		r.Cert = certReport(r.Cert.Path, expiration, time.Now())
+		if r.Cert.Expired {
 			r.Degraded = true
 		}
 	}
@@ -321,6 +328,25 @@ func gatherReport() statusReport {
 	}
 
 	return r
+}
+
+// certReport is the certificate section for a certificate that expires at
+// notAfter, read at now. Expired follows the exact instant (now is not
+// before notAfter), the rule of the policy package; DaysRemaining keeps its
+// whole-day rule.
+func certReport(path string, notAfter, now time.Time) certStatus {
+	return certStatus{
+		Path:          path,
+		Expires:       notAfter.Format("2006-01-02 15:04:05 MST"),
+		DaysRemaining: int(notAfter.Sub(now).Hours() / 24),
+		Expired:       !now.Before(notAfter),
+		notAfter:      notAfter,
+	}
+}
+
+// expiredAt is the expiry time of the report in RFC 3339 UTC.
+func (c certStatus) expiredAt() string {
+	return c.notAfter.UTC().Format(time.RFC3339)
 }
 
 // displayStatus shows the node agent status information. It returns a non-nil
@@ -389,6 +415,11 @@ func connectionSummary(r statusReport) (cause, remedy string) {
 	cause = fmt.Sprintf("could not establish an mTLS stream to %s", r.NodewardHost)
 
 	switch {
+	case r.certificateRefused != "":
+		// The server answered and refused the certificate: a connection
+		// test or a DNS check does not apply.
+		cause = fmt.Sprintf("Nodeward refused the node agent certificate in the TLS handshake (%s)", r.certificateRefused)
+		remedy = "check that the clock of this node is correct with `timedatectl`; if it is, an operator must check this node in the Console"
 	case r.connectionRemedied:
 		// A proven name-resolution fault. `runos register` has to resolve the
 		// same host, so offering it here would send the operator in a circle.
@@ -432,10 +463,12 @@ func failForDegraded(r statusReport) error {
 			"run `runos register` to (re)issue node certificates",
 		)
 	case r.Cert.Expired:
+		// The renew command authenticates with the expired certificate and
+		// cannot work, so the remedy is the one expired text.
 		return roslog.Fail(
 			"validate mTLS certificate",
-			fmt.Sprintf("certificate at %s expired %d days ago", r.Cert.Path, -r.Cert.DaysRemaining),
-			"run `runos certificate renew` to obtain a fresh certificate",
+			fmt.Sprintf("certificate at %s expired on %s", r.Cert.Path, r.Cert.expiredAt()),
+			certpolicy.ExpiredRemedy(r.Cert.notAfter),
 		)
 	case !r.Connected:
 		cause, remedy := connectionSummary(r)
@@ -510,7 +543,7 @@ func renderHuman(r statusReport) {
 		roslog.Printf("  Expires:           %s\n", r.Cert.Expires)
 		switch {
 		case r.Cert.Expired:
-			roslog.Printf("  ✗ Certificate EXPIRED %d days ago\n", -r.Cert.DaysRemaining)
+			roslog.Printf("  ✗ Certificate EXPIRED on %s\n", r.Cert.expiredAt())
 		case r.Cert.DaysRemaining < 7:
 			roslog.Printf("  ℹ Certificate expires in %d days (renewal recommended)\n", r.Cert.DaysRemaining)
 		case r.Cert.DaysRemaining < 30:
