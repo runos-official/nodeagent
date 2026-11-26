@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,14 @@ var (
 	// Interval for checking control plane nodes updates
 	nodeCheckInterval = 5 * time.Second
 )
+
+// haproxyChanges counts HAProxy configuration writes and reloads. It is a
+// test seam and changes no behaviour.
+var haproxyChanges atomic.Int64
+
+// HAProxyChanges returns the number of HAProxy configuration writes plus
+// reloads since the process started.
+func HAProxyChanges() int64 { return haproxyChanges.Load() }
 
 // InitControlPlaneNodesRegistry initializes the registry for control plane nodes
 func InitControlPlaneNodesRegistry() {
@@ -121,8 +130,10 @@ backend k8s_api_backend
 	if err := os.Rename(tempFile, haproxyConfigPath); err != nil {
 		return fmt.Errorf("failed to update HAProxy config: %w", err)
 	}
+	haproxyChanges.Add(1)
 
 	// Reload HAProxy
+	haproxyChanges.Add(1)
 	if err := exec.Command("systemctl", "reload", "haproxy").Run(); err != nil {
 		return fmt.Errorf("failed to reload HAProxy: %w", err)
 	}

@@ -424,3 +424,26 @@ func TestNoKeyMaterialInLogs(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyPKCS8PEMMatchesPublicKey(t *testing.T) {
+	k, err := NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := k.PKCS8PEM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, rest := pem.Decode(b)
+	if block == nil || block.Type != "PRIVATE KEY" || len(rest) != 0 {
+		t.Fatalf("not one PRIVATE KEY block: %q", b)
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok || !priv.PublicKey.Equal(k.Public()) {
+		t.Fatal("PKCS#8 key does not match the public key of the Key")
+	}
+}

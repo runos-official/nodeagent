@@ -163,6 +163,13 @@ func GetCACertPath() string {
 	return caPath
 }
 
+// MTLSPaths returns the configured paths of the mTLS client certificate, the
+// private key and the CA certificate. Unlike GetPublicKeyPath,
+// GetPrivateKeyPath and GetCACertPath it creates no file.
+func MTLSPaths() (cert, key, ca string) {
+	return viper.GetString("mtls.crt"), viper.GetString("mtls.key"), viper.GetString("mtls.ca")
+}
+
 // GetPublicCACertPath returns the path to the public CA certificate used for the
 // L1Sec registration channel.
 func GetPublicCACertPath() string {

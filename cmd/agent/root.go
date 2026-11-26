@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"os"
@@ -16,8 +15,11 @@ import (
 	"github.com/runos-official/nodeagent/agentstream"
 	"github.com/runos-official/nodeagent/commons"
 	"github.com/runos-official/nodeagent/config"
+	"github.com/runos-official/nodeagent/l2sec"
 	"github.com/runos-official/nodeagent/roslog"
 	"github.com/runos-official/nodeagent/uc/certificate"
+	"github.com/runos-official/nodeagent/uc/certrenew"
+	"github.com/runos-official/nodeagent/uc/certstore"
 	syncUc "github.com/runos-official/nodeagent/uc/sync"
 
 	"time"
@@ -45,69 +47,80 @@ agent verifies its mTLS certificate before starting.`,
 	Example: "  runos agent",
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Precondition: this node must be registered, i.e. the mTLS cert/key/CA
-		// must exist, be non-empty and parseable. Starting without them would
-		// fail every Nodeward dial with an opaque mTLS error and spin forever in
-		// the supervised reconnect loop, so fail fast with an actionable remedy.
-		if err := checkRegistered(); err != nil {
-			return err
-		}
+		return start(agentLockPath, func() {
+			// Restore the wg0 boot ordering override before anything else, so this node's NEXT boot
+			// brings the tunnel up without waiting on dnsmasq (commons/wireguard_boot.go). One read
+			// on a healthy node; a rewrite plus daemon-reload on one installed before the reset.
+			commons.EnsureWg0BootOrder()
 
-		// Take an advisory, exclusive flock so a second `runos agent` cannot race
-		// this one over :6446 / wg0. Held for the process lifetime; the fd is
-		// intentionally leaked (released by the kernel on exit). A non-permission
-		// failure to acquire the lock means another agent already holds it.
-		lockFile, err := acquireAgentLock()
-		if err != nil {
-			return err
-		}
-		if lockFile != nil {
-			defer lockFile.Close()
-		}
-
-		// Check certificate expiry and auto-renew if needed. If the certificate
-		// has ALREADY expired and renewal failed, do not continue into a
-		// guaranteed mTLS handshake failure: fail fast with a remedy.
-		renewed, err := certificate.CheckAndAutoRenew()
-		if err != nil {
-			if expired, expiry := certificateExpired(); expired {
-				return roslog.Fail(
-					"Start agent",
-					fmt.Sprintf("mTLS certificate expired on %s and automatic renewal failed: %v", expiry.Format(time.RFC3339), err),
-					"check connectivity to the Nodeward control plane, then run `runos certificate renew`; if it keeps failing, re-register this node from the console",
-				)
-			}
-			roslog.E("Certificate auto-renewal check failed", err)
-		} else if renewed {
-			roslog.I("Certificate was automatically renewed")
-		}
-
-		// Restore the wg0 boot ordering override before anything else, so this node's NEXT boot
-		// brings the tunnel up without waiting on dnsmasq (commons/wireguard_boot.go). One read
-		// on a healthy node; a rewrite plus daemon-reload on one installed before the reset.
-		commons.EnsureWg0BootOrder()
-
-		// VPN peer sync now runs inside runConnection on every (re)connect, plus a
-		// periodic self-heal ticker (see startVpnResyncTicker). Doing it here as a
-		// one-shot ran before the network was routable on a hibernate/wake, failed
-		// silently (it only logged), and was never retried, leaving wg0 with no
-		// peers until a manual `systemctl restart runos`. runConnection only syncs
-		// after the stream connects (network confirmed up), so the wake case now
-		// self-heals.
-		runAgent()
-		return nil
+			// VPN peer sync now runs inside runConnection on every (re)connect, plus a
+			// periodic self-heal ticker (see startVpnResyncTicker). Doing it here as a
+			// one-shot ran before the network was routable on a hibernate/wake, failed
+			// silently (it only logged), and was never retried, leaving wg0 with no
+			// peers until a manual `systemctl restart runos`. runConnection only syncs
+			// after the stream connects (network confirmed up), so the wake case now
+			// self-heals.
+			runAgent()
+		})
 	},
+}
+
+// startSteps are the steps of the start path before run, in order. A test
+// wraps them to record the order.
+var startSteps = struct {
+	lock    func(path string) (*os.File, error)
+	recover func()
+	check   func() error
+}{
+	lock:    acquireAgentLock,
+	recover: certificate.RecoverAtStart,
+	check:   checkRegistered,
+}
+
+// start is the start path of `runos agent` up to the first dial. lockPath is
+// the agent lock; run starts the agent services. Tests inject both.
+//
+// An expired certificate does not end the start: an expired pair that
+// matches passes the registration check, and the agent enters the expired
+// state before its first dial (expired_state.go).
+func start(lockPath string, run func()) error {
+	// Take an advisory, exclusive flock so a second `runos agent` cannot race
+	// this one over :6446 / wg0. Held for the process lifetime; the fd is
+	// intentionally leaked (released by the kernel on exit). A non-permission
+	// failure to acquire the lock means another agent already holds it.
+	lockFile, err := startSteps.lock(lockPath)
+	if err != nil {
+		return err
+	}
+	if lockFile != nil {
+		defer lockFile.Close()
+	}
+
+	// Bring the certificate store to rest BEFORE the registration check: a
+	// crash between the key rename and the certificate rename of an adoption
+	// leaves a key that does not match the certificate, and only the
+	// recovery repairs it. On an unregistered node this changes nothing.
+	startSteps.recover()
+
+	// Precondition: this node must be registered, i.e. the mTLS cert/key/CA
+	// must exist, be non-empty and parseable. Starting without them would
+	// fail every Nodeward dial with an opaque mTLS error and spin forever in
+	// the supervised reconnect loop, so fail fast with an actionable remedy.
+	if err := startSteps.check(); err != nil {
+		return err
+	}
+
+	run()
+	return nil
 }
 
 // checkRegistered verifies this node is registered: the mTLS client certificate,
 // private key and CA all exist, are non-empty, and the cert/key load as a valid
 // keypair. On any failure it returns an already-reported roslog.Fail with the
-// remedy to register. config.Get*Path create an empty file if missing, so an
-// "empty" file is the unregistered case.
+// remedy to register. It reads the configured paths without creating a file;
+// a missing or empty file is the unregistered case.
 func checkRegistered() error {
-	certPath := config.GetPublicKeyPath()
-	keyPath := config.GetPrivateKeyPath()
-	caPath := config.GetCACertPath()
+	certPath, keyPath, caPath := config.MTLSPaths()
 
 	for _, p := range []struct{ kind, path string }{
 		{"mTLS certificate", certPath},
@@ -126,7 +139,7 @@ func checkRegistered() error {
 
 	// Both cert and key are present and non-empty: confirm they parse as a valid
 	// mTLS keypair so we catch a truncated / corrupt registration before dialing.
-	if _, err := tls.LoadX509KeyPair(certPath, keyPath); err != nil {
+	if _, err := certstore.LoadKeyPair(certPath, keyPath); err != nil {
 		return roslog.Fail(
 			"Start agent",
 			fmt.Sprintf("this node's mTLS certificate/key is unreadable or corrupt (%v)", err),
@@ -137,24 +150,13 @@ func checkRegistered() error {
 	return nil
 }
 
-// certificateExpired reports whether the on-disk mTLS certificate's NotAfter is
-// in the past, returning the expiry time. On a read/parse error it returns
-// (false, zero) so callers fall back to the non-fatal path.
-func certificateExpired() (bool, time.Time) {
-	expiry, err := certificate.GetCertificateExpiration()
-	if err != nil {
-		return false, time.Time{}
-	}
-	return time.Now().After(expiry), expiry
-}
-
 // acquireAgentLock takes an exclusive, non-blocking advisory lock at
 // agentLockPath. It returns the open lock file (whose fd holds the lock for the
 // process lifetime) on success. If another agent already holds the lock it
 // returns an already-reported roslog.Fail. Inability to create/open the lock
 // file (e.g. /run not writable in an unusual environment) is treated as a soft
 // failure: it logs a warning and returns (nil, nil) so the agent still starts.
-func acquireAgentLock() (*os.File, error) {
+func acquireAgentLock(agentLockPath string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(agentLockPath), 0755); err != nil {
 		roslog.W("Could not create agent lock directory; skipping single-instance lock", err, "path", agentLockPath)
 		return nil, nil
@@ -217,7 +219,9 @@ func startVpnResyncTicker(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if _, err := syncUc.ForceVpnSyncWithCount(); err != nil {
+				// An expired certificate is silent here: the dial makes
+				// no connection and the expired reporter owns the line.
+				if _, err := vpnSync(); err != nil && !backend.IsCertificateExpired(err) {
 					roslog.W("Periodic VPN peer resync failed; will retry on the next tick", err)
 				}
 			}
@@ -278,24 +282,93 @@ func runAgent() {
 
 	go handleSignals(sigChan, roslog.ReopenLogFile, rootCancel)
 
-	superviseConnections(rootCtx, commons.NewReconnectBackoff(), runConnection, waitOrDone)
+	runAgentWith(rootCtx, agentDeps{})
 
 	roslog.I("Agent terminated")
+}
+
+// agentDeps are the parts of runAgentWith that a test replaces. A zero field
+// gets the production default.
+type agentDeps struct {
+	// connect runs one connection; runConnection by default.
+	connect func(ctx context.Context, renewal *certrenew.Loop) (shutdown bool, upFor time.Duration)
+	// renewal are the dependencies of the renewal loop. OnExpired is always
+	// the expired reporter.
+	renewal certrenew.Deps
+	// hold is the expired state; nil builds it on the configured paths.
+	hold func(r *expiredReporter, b *commons.Backoff) *expiredHold
+	// wait is the reconnect wait; waitOrDone by default.
+	wait func(context.Context, time.Duration)
+}
+
+// runAgentWith runs the renewal loop and the supervised connections until
+// rootCtx ends.
+func runAgentWith(rootCtx context.Context, d agentDeps) {
+	if d.connect == nil {
+		d.connect = runConnection
+	}
+	if d.hold == nil {
+		d.hold = newExpiredHold
+	}
+	if d.wait == nil {
+		d.wait = waitOrDone
+	}
+
+	// One reporter owns the expired line for the life of this process,
+	// with or without a stream.
+	reporter := newExpiredReporter(config.GetNID(), nil)
+
+	// One certificate renewal loop for the life of this process. It starts
+	// before the first dial and waits for a connected stream before its
+	// first request. A reconnect does not start, stop or reset it.
+	d.renewal.OnExpired = reporter.Report
+	renewal := certrenew.New(d.renewal)
+	renewal.Start(rootCtx)
+
+	b := commons.NewReconnectBackoff()
+	superviseConnections(rootCtx, b, func(ctx context.Context) (bool, time.Duration) {
+		return d.connect(ctx, renewal)
+	}, d.wait, d.hold(reporter, b))
+
+	// Give a renewal attempt in progress time to adopt its child.
+	if !renewal.Wait(certrenew.ShutdownWait) {
+		roslog.W("Certificate renewal attempt still running at shutdown; the certificate store repairs it at the next start", nil)
+	}
 }
 
 // superviseConnections runs connect until it reports a shutdown. After each
 // recoverable end it waits b's next delay. connect returns how long the
 // connection stayed up (0 when it never came up); a long enough run resets b.
+//
+// Before each connect, and after each connect that ended with no shutdown,
+// it asks h whether the held certificate has expired. An expired certificate
+// enters the expired state (h.hold): no dial, no reconnect line and no
+// backoff until a valid pair is on disk. A nil h skips the check.
 func superviseConnections(
 	rootCtx context.Context,
 	b *commons.Backoff,
 	connect func(context.Context) (shutdown bool, upFor time.Duration),
 	wait func(context.Context, time.Duration),
+	h *expiredHold,
 ) {
 	for rootCtx.Err() == nil {
+		if leaf, expired := h.expired(); expired {
+			if h.hold(rootCtx, leaf) {
+				return
+			}
+			continue
+		}
 		shutdown, upFor := connect(rootCtx)
 		if shutdown {
 			return
+		}
+		// A connection that ended on an expired certificate, or a stream
+		// that outlived its certificate, enters the expired state.
+		if leaf, expired := h.expired(); expired {
+			if h.hold(rootCtx, leaf) {
+				return
+			}
+			continue
 		}
 		// Recoverable error: back off, then re-dial. The per-connection services,
 		// including the VPN peer sync, are re-established by the next connect.
@@ -323,7 +396,8 @@ func waitOrDone(ctx context.Context, d time.Duration) {
 // cancelled (permanent shutdown), false on a recoverable error that should
 // trigger a reconnect. upFor is how long the stream stayed up (0 when it never
 // came up); the caller resets the reconnect backoff after a long enough run.
-func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration) {
+// renewal hears when the stream is up and when it ends; it may be nil.
+func runConnection(rootCtx context.Context, renewal *certrenew.Loop) (shutdown bool, upFor time.Duration) {
 	// Per-connection context: cancelled when this connection ends so all of its
 	// services unwind, independent of rootCtx (which spans all connections).
 	connCtx, connCancel := context.WithCancel(rootCtx)
@@ -331,12 +405,17 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 
 	// Establish connection to Nodeward (bounded dial; returns an error instead
 	// of blocking forever or panicking on a transient failure).
-	c, _, _, conn, err := backend.NodewardL2Sec()
+	c, closeConn, err := dialNodeward()
 	if err != nil {
-		roslog.E("Error connecting to Nodeward", err)
+		// An expired certificate is the expired state, not a lost
+		// connection: superviseConnections holds and the reporter writes the
+		// line.
+		if !backend.IsCertificateExpired(err) {
+			roslog.E("Error connecting to Nodeward", err)
+		}
 		return rootCtx.Err() != nil, 0
 	}
-	defer conn.Close()
+	defer closeConn()
 
 	stream, err := c.NodeAgentStream(context.Background())
 	if err != nil {
@@ -344,6 +423,10 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 		return rootCtx.Err() != nil, 0
 	}
 	connectedAt := time.Now()
+	// The renewal loop waits for a connected stream before a request. The
+	// signals change no schedule.
+	renewal.NotifyConnected()
+	defer renewal.NotifyDisconnected()
 
 	roslog.D("Stream established, starting services")
 
@@ -366,8 +449,10 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 	// runos`. Best-effort: a transient sync failure must not tear down an
 	// otherwise-healthy connection, so we log and continue; the periodic resync
 	// below and the next reconnect retry it.
-	if skipped, err := syncUc.ForceVpnSyncWithCount(); err != nil {
-		roslog.W("VPN peer sync on connect failed; will retry on the periodic resync and next reconnect", err)
+	if skipped, err := vpnSync(); err != nil {
+		if !backend.IsCertificateExpired(err) {
+			roslog.W("VPN peer sync on connect failed; will retry on the periodic resync and next reconnect", err)
+		}
 	} else if skipped > 0 {
 		roslog.W("VPN peer sync on connect applied with some peers skipped", nil, "skipped", skipped)
 	}
@@ -379,18 +464,16 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 	startVpnResyncTicker(connCtx)
 
 	// Start the Kubernetes API proxy server.
-	proxyDone := agentstream.StartHAProxyServer(connCtx)
+	proxyDone := connServices.haproxy(connCtx)
 
 	// Start the heartbeat manager.
-	heartbeatDone := agentstream.StartNodeAgentHeartbeatManager(connCtx)
+	heartbeatDone := connServices.heartbeat(connCtx)
 
 	// Report patch state on its own slow schedule. The reporter never uses the
 	// five second heartbeat ticker.
-	patchFactsDone := agentstream.StartNodePatchFactsReporter(connCtx)
+	patchFactsDone := connServices.patchFacts(connCtx)
 
-	if err := backend.AddNodelog(3, "NodeAgentLifecycle", "Agent started"); err != nil {
-		roslog.E("Error adding nodelog", err)
-	}
+	lifecycleLog("Agent started")
 
 	roslog.I("All services started, agent running")
 
@@ -424,13 +507,49 @@ func runConnection(rootCtx context.Context) (shutdown bool, upFor time.Duration)
 	waitConnectionServicesDone(streamDone, proxyDone, heartbeatDone, reason)
 
 	if shutdown {
-		logMsg := "Agent stopped"
-		if err := backend.AddNodelog(3, "NodeAgentLifecycle", logMsg); err != nil {
-			roslog.E("Error adding nodelog", err)
-		}
+		lifecycleLog("Agent stopped")
 	}
 
 	return shutdown, upFor
+}
+
+// lifecycleLog sends one agent lifecycle node log entry. An expired
+// certificate is silent: the dial makes no connection and the expired
+// reporter owns the line.
+func lifecycleLog(msg string) {
+	if err := addNodelog(3, "NodeAgentLifecycle", msg); err != nil && !backend.IsCertificateExpired(err) {
+		roslog.E("Error adding nodelog", err)
+	}
+}
+
+// Seams of runConnection. Tests replace them; production uses the real
+// dial, sync, node log and services.
+var (
+	dialNodeward = dialL2Sec
+	vpnSync      = syncUc.ForceVpnSyncWithCount
+	addNodelog   = backend.AddNodelog
+	connServices = struct {
+		haproxy    func(context.Context) <-chan struct{}
+		heartbeat  func(context.Context) chan struct{}
+		patchFacts func(context.Context) chan struct{}
+	}{
+		haproxy:    agentstream.StartHAProxyServer,
+		heartbeat:  agentstream.StartNodeAgentHeartbeatManager,
+		patchFacts: agentstream.StartNodePatchFactsReporter,
+	}
+)
+
+// dialL2Sec dials L2Sec and gives the client and the function that closes
+// the connection.
+func dialL2Sec() (l2sec.NodewardClient, func(), error) {
+	c, _, cancel, conn, err := backend.NodewardL2Sec()
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, func() {
+		cancel()
+		conn.Close()
+	}, nil
 }
 
 // waitConnectionServicesDone waits for the three per-connection service channels

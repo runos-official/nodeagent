@@ -14,10 +14,11 @@ var renewCmd = &cobra.Command{
 	Long: `Renew the mTLS certificate used by the node agent for secure communication.
 
 This command will:
-  1. Back up the existing certificates
+  1. Take the renewal lock, so only one renewal runs at a time
   2. Connect to Nodeward using your current certificate
-  3. Request a new certificate
-  4. Write and test the new certificate (restoring the backup on failure)
+  3. Request a new certificate for a fresh local key
+  4. Check the new certificate and adopt it in stages (the current
+     certificate stays in place when the new one fails a check)
 
 After a successful renewal, restart the agent service within the grace period:
   sudo systemctl restart runos.service
