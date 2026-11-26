@@ -32,6 +32,10 @@ as the GitHub release notes, so every released version needs a section here.
 - A node delete no longer leaves cri-tools installed. The uninstall released the apt hold on cri-tools and then purged a hand-typed list of nine package names that omitted it, so the package survived every node delete with its hold released. The purge list is now derived from the one declaration and is a superset of the held set by construction, which a test enforces (FCR 933).
 - The Kubernetes node upgrade no longer skips a real containerd upgrade when the target version spells the start of the installed one. A target of 1.7.2 prefix-matched an installed 1.7.24, so the upgrade reported "containerd already at 1.7.2" and installed nothing. It also no longer reinstalls containerd when only the distribution revision differs, because moving a held package to a newer revision belongs to a controlled maintenance run. On a version it cannot read it installs the target, because the caller asked for that version explicitly.
 
+### Security
+
+- The agent builds with Go 1.26.11 instead of Go 1.26.10. Go 1.26.11 fixes GO-2026-6859, a race in net/http that can crash an HTTP/1 server, which govulncheck reported as reachable from this code. The toolchain line in go.mod selects the new version.
+
 ## v1.8.7
 
 ### Changed
