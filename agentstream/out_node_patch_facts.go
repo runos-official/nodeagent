@@ -145,6 +145,13 @@ type patchFactsReporter struct {
 	mailbox   *patchFactsMailbox
 	wake      chan struct{}
 	backoff   *commons.Backoff
+
+	// background guards the one collection that triggerInBackground may run.
+	background struct {
+		sync.Mutex
+		running bool
+		again   bool
+	}
 }
 
 func newPatchFactsReporter(
@@ -176,6 +183,38 @@ func (r *patchFactsReporter) trigger(opts patchfacts.Options) error {
 	default:
 	}
 	return nil
+}
+
+// triggerInBackground starts a collection and returns at once. While one
+// background collection runs, further calls start none: they ask for exactly
+// one more when it ends, so the last record describes the state after the last
+// caller. A collection is an apt-get run, so a burst of callers must not
+// become a burst of collections.
+func (r *patchFactsReporter) triggerInBackground(opts patchfacts.Options) {
+	r.background.Lock()
+	if r.background.running {
+		r.background.again = true
+		r.background.Unlock()
+		return
+	}
+	r.background.running = true
+	r.background.Unlock()
+
+	go func() {
+		for {
+			if err := r.trigger(opts); err != nil {
+				roslog.E("Could not collect immediate node patch facts", err)
+			}
+			r.background.Lock()
+			if !r.background.again {
+				r.background.running = false
+				r.background.Unlock()
+				return
+			}
+			r.background.again = false
+			r.background.Unlock()
+		}
+	}()
 }
 
 func (r *patchFactsReporter) pending() int {
@@ -286,8 +325,9 @@ func clearActivePatchFactsReporter(reporter *patchFactsReporter) {
 	activePatchFactsReporter.Unlock()
 }
 
-// TriggerNodePatchFactsReport requests a fresh immediate report. It is safe to
-// call when the daemon reporter is not active.
+// TriggerNodePatchFactsReport collects a fresh immediate report before it
+// returns, which takes seconds. Use RequestNodePatchFactsReport where a caller
+// waits for a reply. It is safe to call when the daemon reporter is not active.
 func TriggerNodePatchFactsReport() {
 	activePatchFactsReporter.RLock()
 	reporter := activePatchFactsReporter.reporter
@@ -298,6 +338,19 @@ func TriggerNodePatchFactsReport() {
 	if err := reporter.trigger(patchfacts.Options{}); err != nil {
 		roslog.E("Could not collect immediate node patch facts", err)
 	}
+}
+
+// RequestNodePatchFactsReport asks for a fresh immediate report and does not
+// wait for the collection. Use it on a path whose caller waits for a reply.
+// It is safe to call when the daemon reporter is not active.
+func RequestNodePatchFactsReport() {
+	activePatchFactsReporter.RLock()
+	reporter := activePatchFactsReporter.reporter
+	activePatchFactsReporter.RUnlock()
+	if reporter == nil {
+		return
+	}
+	reporter.triggerInBackground(patchfacts.Options{})
 }
 
 // StartNodePatchFactsReporter starts the reporter, the random first pass, and

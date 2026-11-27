@@ -7,6 +7,12 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The release pipeline extracts the section matching the pushed tag (`## vX.Y.Z`)
 as the GitHub release notes, so every released version needs a section here.
 
+## v1.9.1
+
+### Fixed
+
+- A remote script now replies as soon as the script ends. Since v1.9.0 the reply waited for the patch facts collection that every remote script triggers. The collection runs `apt-get -s upgrade`, `dpkg-query` and `systemctl show`, and it took 1.5 to 13 seconds on a node (measured on production, 2026-11-27), so every script that the control plane ran on a node cost that long. The collection now runs in the background after the reply. While one background collection runs, further scripts ask for one more collection and no more. A Kubernetes node upgrade still collects before it replies.
+
 ## v1.9.0
 
 ### Added

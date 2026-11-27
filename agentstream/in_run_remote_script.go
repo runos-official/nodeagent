@@ -362,7 +362,13 @@ func HandleRunRemoteScript(b64ScriptData *pb.ToNodeAgent) (*pb.FromNodeAgent, er
 	// The controlled package run arrives as a remote script. The agent cannot
 	// safely infer which valid scripts change packages, so every completed
 	// remote script refreshes the patch facts.
-	defer TriggerNodePatchFactsReport()
+	//
+	// The refresh runs AFTER the reply, in the background. The collection runs
+	// apt-get and dpkg and takes 1.5 to 13 seconds on a node (measured on
+	// production, 2026-11-27). While the reply waited for it, every remote
+	// script cost that long, and a control plane request that ran several
+	// scripts passed its caller's timeout.
+	defer RequestNodePatchFactsReport()
 
 	scriptURL, err := buildRemoteScriptURL(request.Script, request.Params)
 	if err != nil {

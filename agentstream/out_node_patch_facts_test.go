@@ -519,3 +519,67 @@ func waitForPatchFacts(t *testing.T, ready func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// A burst of scripts must not start a burst of collections: each one is an
+// apt-get run. While one background collection runs, any number of further
+// requests cost exactly one more collection, which sees the state after the
+// last of them.
+func TestBackgroundPatchFactsRequestsCoalesce(t *testing.T) {
+	var mu sync.Mutex
+	running, widest, total := 0, 0, 0
+	started := make(chan struct{}, 16)
+	release := make(chan struct{})
+	reporter := newPatchFactsReporter(
+		patchFactsCollectorFunc(func(opts patchfacts.Options) (patchfacts.Record, error) {
+			if opts.SlowPass {
+				t.Error("a background request used a slow pass")
+			}
+			mu.Lock()
+			running++
+			total++
+			if running > widest {
+				widest = running
+			}
+			mu.Unlock()
+			started <- struct{}{}
+			<-release
+			mu.Lock()
+			running--
+			mu.Unlock()
+			return patchfacts.Record{}, nil
+		}),
+		func(context.Context, patchfacts.Record) patchFactsSendResult {
+			return patchFactsSendResult{kind: patchFactsAccepted}
+		},
+		func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+	)
+
+	reporter.triggerInBackground(patchfacts.Options{})
+	<-started
+	for i := 0; i < 10; i++ {
+		reporter.triggerInBackground(patchfacts.Options{})
+	}
+	close(release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		done := total == 2 && running == 0
+		mu.Unlock()
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			mu.Lock()
+			defer mu.Unlock()
+			t.Fatalf("collections: total %d, running %d; want 2 and 0", total, running)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if total != 2 || widest != 1 {
+		t.Fatalf("collections: total %d, at most %d at once; want 2 and 1", total, widest)
+	}
+}
